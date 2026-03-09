@@ -1,14 +1,9 @@
-from fastapi import APIRouter
-from app.services.matching_service import match_candidates
+from fastapi import APIRouter, UploadFile, File
+from app.services.tender_service import process_tender
 
 router = APIRouter(prefix="/tenders", tags=["Tenders"])
 
-
-@router.get("/match")
-def match(query: str):
-
-    results = match_candidates(query)
-
-    return {
-        "matches": results
-    }
+@router.post("/upload")
+async def upload_tender(file: UploadFile = File(...)):
+    result = await process_tender(file)
+    return {"message": "Tender stored successfully", "details": result}

@@ -1,24 +1,39 @@
 import faiss
-import numpy as np
 import os
+import pickle
+import numpy as np
 
-VECTOR_PATH = "vector_store/resume_index.faiss"
+VECTOR_PATH = "vector_store"
 
-dimension = 384
+def store_vectors(chunks, embeddings, index_name):
 
-if os.path.exists(VECTOR_PATH):
-    index = faiss.read_index(VECTOR_PATH)
-else:
-    index = faiss.IndexFlatL2(dimension)
+    os.makedirs(VECTOR_PATH, exist_ok=True)
 
+    index_path = f"{VECTOR_PATH}/{index_name}_index.faiss"
+    meta_path = f"{VECTOR_PATH}/{index_name}_metadata.pkl"
 
-def store_vector(vector):
-    vector = np.array([vector]).astype("float32")
-    index.add(vector)
-    faiss.write_index(index, VECTOR_PATH)
+    dim = len(embeddings[0])
 
+    if os.path.exists(index_path):
+        index = faiss.read_index(index_path)
+    else:
+        index = faiss.IndexFlatL2(dim)
 
-def search_vectors(query_vector, k=5):
-    query_vector = np.array([query_vector]).astype("float32")
-    distances, indices = index.search(query_vector, k)
-    return distances, indices
+    if os.path.exists(meta_path):
+        with open(meta_path, "rb") as f:
+            metadata = pickle.load(f)
+    else:
+        metadata = []
+        with open(meta_path, "wb") as f:
+            pickle.dump(metadata, f)
+
+    index.add(np.array(embeddings, dtype="float32"))
+
+    metadata.extend(chunks)
+
+    faiss.write_index(index, index_path)
+
+    with open(meta_path, "wb") as f:
+        pickle.dump(metadata, f)
+
+    print("Vector stored in FAISS:", index_name)

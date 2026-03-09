@@ -366,4 +366,32 @@ Possible extensions:
 
 ---
 
+# 21. Current Implementation Progress (Updated March 9, 2026)
+
+Completed:
+
+• FastAPI app bootstrap is implemented in `app/main.py` with root health response.
+• Resume upload route is active at `POST /resumes/upload`.
+• Tender upload route is active at `POST /tenders/upload`.
+• `resume_service.process_resume()` is wired to the RAG pipeline:
+  load PDF → clean text → split text → create embedding → store vector.
+• `tender_service.process_tender()` base handler is implemented.
+• RAG utilities implemented:
+  `loader.py`, `cleaner.py`, `chunker.py`, `embeddings.py`, `vector_store.py`.
+• Vector search helper `search_vectors()` is implemented in `vector_store.py`.
+• File save helper `save_file()` is implemented in `utils/file_storage.py`.
+• Installed runtime packages include:
+  `fastapi`, `uvicorn`, `python-multipart`, `pymupdf`, `faiss-cpu`, `numpy`.
+
+Pending / In Progress:
+
+• `sentence-transformers` full runtime setup may still require completing `torch` installation.
+• Persistence to disk is not yet implemented for:
+  `vector_store/resume_index.faiss`
+  `vector_store/resume_metadata.json`
+• Metadata mapping and retriever integration are still pending.
+• API docs in Section 12 should be updated to fully match currently active route prefixes.
+
+---
+
 # End of AGENTS.md
