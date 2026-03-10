@@ -1,84 +1,86 @@
 import { useRef, useState } from "react";
-import { uploadTender as uploadTenderApi } from "../api/api";
+import API from "../api/api";
 
 export default function TenderUpload() {
   const fileInputRef = useRef(null);
+
   const [file, setFile] = useState(null);
-  const [status, setStatus] = useState("");
+  const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const handleUploadTender = async () => {
+  const handlePickFile = () => {
+    fileInputRef.current?.click();
+  };
+
+  const uploadTender = async () => {
     if (!file) {
-      setStatus("Please select a tender PDF first.");
+      alert("Please select a tender PDF");
       return;
     }
 
     try {
       setLoading(true);
-      setStatus("");
-      const res = await uploadTenderApi(file);
-      const message = res.data?.message || "Tender uploaded successfully.";
-      const chunkCount = res.data?.details?.chunks;
-      setStatus(
-        typeof chunkCount === "number"
-          ? `${message} Chunks: ${chunkCount}`
-          : message
-      );
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await API.post("/tenders/upload", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
+
+      setResult(res.data);
     } catch (error) {
-      setStatus(
-        error?.response?.data?.detail ||
-          "Tender upload failed. Check backend logs."
-      );
+      console.error(error);
+      alert("Tender upload failed");
     } finally {
       setLoading(false);
     }
   };
 
-  const onUploadClick = () => {
-    void handleUploadTender();
-  };
-
-  const onSelectFileClick = () => {
-    fileInputRef.current?.click();
-  };
-
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf,application/pdf"
-        className="hidden"
+        accept=".pdf"
         onChange={(e) => {
-          const selected = e.target.files?.[0] || null;
-          setFile(selected);
-          setStatus(selected ? `Selected: ${selected.name}` : "");
+          setFile(e.target.files?.[0] || null);
+          setResult(null);
         }}
+        className="hidden"
       />
 
       <button
         type="button"
-        onClick={onSelectFileClick}
-        className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg w-full border border-gray-500"
+        onClick={handlePickFile}
+        className="w-full rounded-lg border border-gray-500 bg-gray-700 px-4 py-3 text-white hover:bg-gray-600"
       >
-        {file ? "Change Tender File" : "Select Tender PDF"}
+        {file ? "Change Tender File" : "Choose Tender File"}
       </button>
 
-      <p className="text-xs text-gray-400">
-        {file ? file.name : "No file selected"}
-      </p>
+      {file && (
+        <div className="rounded-lg bg-gray-700 p-3 text-sm">
+          <p><strong>Selected:</strong> {file.name}</p>
+        </div>
+      )}
 
       <button
-        type="button"
-        onClick={onUploadClick}
+        onClick={uploadTender}
         disabled={loading}
-        className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg w-full"
+        className="w-full rounded-lg bg-green-600 px-4 py-3 text-white hover:bg-green-700 disabled:opacity-50"
       >
         {loading ? "Uploading..." : "Upload Tender"}
       </button>
 
-      {status && <p className="text-sm text-gray-300">{status}</p>}
-
+      {result && (
+        <div className="rounded-lg bg-gray-700 p-3 text-sm">
+          <p><strong>Message:</strong> {result.message}</p>
+          <p><strong>Chunks:</strong> {result.chunks}</p>
+          <p><strong>Stored Chunks:</strong> {result.stored_chunks}</p>
+        </div>
+      )}
     </div>
   );
 }

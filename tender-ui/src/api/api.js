@@ -10,6 +10,14 @@ export const uploadResume = (file) => {
   return API.post("/resumes/upload", formData);
 };
 
+export const uploadResumes = (files) => {
+  const formData = new FormData();
+  files.forEach((file) => {
+    formData.append("files", file);
+  });
+  return API.post("/resumes/upload-multiple", formData);
+};
+
 export const uploadTender = (file) => {
   const formData = new FormData();
   formData.append("file", file);
