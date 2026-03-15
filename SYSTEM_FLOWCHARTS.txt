@@ -1,0 +1,1592 @@
+TENDER RAG SYSTEM
+COMPLETE FLOWCHARTS AND LIBRARY ACTIVATION MAP
+
+Goal of this file
+- Show the project as diagrams.
+- Include the user journey, frontend, backend, libraries, frameworks, storage,
+  and decision branches.
+- Show when each major library/framework becomes active.
+
+Legend
+- [BOX] = component / module / layer
+- -->   = data or control flow
+- ==>   = important output/result
+- (?)   = decision point
+- {lib} = library or framework involved at that step
+
+
+===============================================================================
+1. MASTER SYSTEM FLOW: USER TO FINAL RESPONSE
+===============================================================================
+
+                              +----------------------+
+                              |        USER          |
+                              | Browser + clicks +   |
+                              | file selection +     |
+                              | query input          |
+                              +----------+-----------+
+                                         |
+                                         v
+                              +----------------------+
+                              |      FRONTEND        |
+                              | React 19 + Vite +    |
+                              | Tailwind + Axios     |
+                              +----------+-----------+
+                                         |
+                    +--------------------+---------------------+
+                    |                                          |
+                    v                                          v
+         +----------------------+                   +----------------------+
+         | Upload Tender/Resume |                   | Ask Question / Match |
+         | file inputs, FormData|                   | textarea + POST JSON |
+         +----------+-----------+                   +----------+-----------+
+                    |                                          |
+                    +--------------------+---------------------+
+                                         |
+                                         v
+                              +----------------------+
+                              |       BACKEND        |
+                              | Uvicorn + FastAPI    |
+                              | APIRouter + Pydantic |
+                              +----------+-----------+
+                                         |
+                  +----------------------+-----------------------+
+                  |                                              |
+                  v                                              v
+      +----------------------------+              +----------------------------+
+      | Document Ingestion Service |              | Query Service              |
+      | upload pipeline            |              | QA vs Matching router      |
+      +-------------+--------------+              +-------------+--------------+
+                    |                                             |
+                    |                                             |
+                    v                                             v
+     +------------------------------+              +----------------------------+
+     | PDF validation + dedupe      |              | Intent classification      |
+     | save file + extract pages    |              | scope resolution           |
+     | clean + section + chunk      |              +-------------+--------------+
+     | embed + FAISS + DB           |                            |
+     | structured extract + evidence|                            |
+     +-------------+----------------+                            |
+                   |                                             |
+                   v                                             v
+     +-------------------------------+             +-----------------------------+
+     | Stored document artifacts     |             | (?) mode = QA or Matching   |
+     | uploads/ + SQLite + FAISS     |             +-------------+---------------+
+     +-------------------------------+                           |
+                                                                 |
+                                  +------------------------------+-----------------------------+
+                                  |                                                            |
+                                  v                                                            v
+                      +---------------------------+                               +---------------------------+
+                      | QA retrieval + prompting  |                               | Matching + scoring +      |
+                      | hybrid search + Ollama    |                               | LangGraph reasoning        |
+                      +-------------+-------------+                               +-------------+-------------+
+                                    |                                                           |
+                                    v                                                           v
+                      +---------------------------+                               +---------------------------+
+                      | JSON response with        |                               | JSON response with        |
+                      | answer_text + sources     |                               | ranked matches + summary  |
+                      +-------------+-------------+                               +-------------+-------------+
+                                    |                                                           |
+                                    +--------------------------+--------------------------------+
+                                                               |
+                                                               v
+                                                  +----------------------------+
+                                                  | React UI renders results   |
+                                                  | JSON views, profiles, PDF  |
+                                                  | open links                 |
+                                                  +----------------------------+
+
+
+===============================================================================
+2. USER JOURNEY FLOWCHART
+===============================================================================
+
+                      +-------------------------------------+
+                      | User opens app in browser           |
+                      +------------------+------------------+
+                                         |
+                                         v
+                      +-------------------------------------+
+                      | Sees 3 main areas                   |
+                      | 1. Upload Resumes                   |
+                      | 2. Upload Tender                    |
+                      | 3. Ask AI                           |
+                      +------------------+------------------+
+                                         |
+         +-------------------------------+-----------------------------------+
+         |                               |                                   |
+         v                               v                                   v
+ +---------------+             +-----------------+                +----------------------+
+ | Upload resume |             | Upload tender   |                | Ask question / match |
+ +------+--------+             +--------+--------+                +----------+-----------+
+        |                               |                                    |
+        v                               v                                    v
+ +---------------+             +-----------------+                +----------------------+
+ | Select 1 or N |             | Select 1 PDF    |                | Type query           |
+ | resume PDFs   |             | tender PDF      |                | e.g. ask question or |
+ +------+--------+             +--------+--------+                | shortlist candidates |
+        |                               |                         +----------+-----------+
+        v                               v                                    |
+ +---------------+             +-----------------+                           |
+ | Click Upload  |             | Click Upload    |                           |
+ +------+--------+             +--------+--------+                           |
+        |                               |                                    |
+        v                               v                                    v
+ +---------------+             +-----------------+                +----------------------+
+ | Backend parses|             | Backend parses  |                | Backend receives     |
+ | and stores    |             | and stores      |                | scoped query         |
+ +------+--------+             +--------+--------+                +----------+-----------+
+        |                               |                                    |
+        v                               v                                    v
+ +---------------+             +-----------------+                +----------------------+
+ | Resume JSON   |             | Tender JSON     |                | QA answer or ranked  |
+ | appears in UI |             | appears in UI   |                | profiles appear      |
+ +------+--------+             +--------+--------+                +----------+-----------+
+        |                               |                                    |
+        +-------------------------------+---------------------+--------------+
+                                                              |
+                                                              v
+                                              +-------------------------------+
+                                              | User can switch workspace tab |
+                                              | Resume JSON / Tender JSON /   |
+                                              | Profiles                      |
+                                              +-------------------------------+
+
+
+Other user actions
+
+1. Open PDF
+User clicks "Open Resume" or "Open Tender" or profile row
+  --> frontend builds `/documents/{id}/file`
+  --> backend returns `FileResponse`
+  --> browser opens stored PDF
+
+2. Clear database
+User clicks "Clear Database"
+  --> confirm popup
+  --> POST `/system/clear-database`
+  --> backend deletes DB rows, uploads, vector files
+  --> UI resets local state
+
+
+===============================================================================
+3. FRONTEND RUNTIME FLOW
+===============================================================================
+
+Framework activation order
+
+  Browser
+    --> loads `tender-ui/index.html`
+    --> loads `src/main.jsx`
+    --> {React DOM} mounts app to `#root`
+    --> {React StrictMode} wraps app
+    --> `App.jsx` creates main state
+    --> {TailwindCSS} styles all visible components
+
+
+Frontend component tree
+
+  [main.jsx]
+      |
+      v
+  [App.jsx]
+      |
+      +--> [ResumeUpload.jsx]
+      |
+      +--> [TenderUpload.jsx]
+      |
+      +--> [AskAgent.jsx]
+      |
+      +--> [InsightsPanel.jsx]
+
+
+Frontend state flow
+
+  App.jsx state
+  - activeResumeDocumentIds
+  - activeTenderDocumentId
+  - resumeUploads
+  - tenderUpload
+  - latestMatchResult
+  - activeWorkspaceTab
+  - uiResetKey
+  - systemMessage
+  - systemMessageIsError
+  - clearingDatabase
+
+State propagation
+
+  ResumeUpload complete
+    --> returns document IDs + upload payload
+    --> App stores active resume IDs
+    --> App clears previous match result
+    --> InsightsPanel can show resume JSON
+
+  TenderUpload complete
+    --> returns document ID + upload payload
+    --> App stores active tender ID
+    --> App clears previous match result
+    --> InsightsPanel can show tender JSON
+
+  AskAgent answer ready
+    --> App stores latest match result
+    --> App switches to profiles tab if needed
+
+
+Frontend HTTP flow
+
+  [ResumeUpload.jsx] --{Axios}--> POST /resumes/upload
+  [ResumeUpload.jsx] --{Axios}--> POST /resumes/upload-multiple
+  [TenderUpload.jsx] --{Axios}--> POST /tenders/upload
+  [AskAgent.jsx]     --{Axios}--> POST /match/
+  [App.jsx]          --{Axios}--> POST /system/clear-database
+  [InsightsPanel.jsx]            --> window.open(/documents/{id}/file)
+
+
+Browser-side libraries and APIs
+
+| Tool / API | Where used | Why it matters |
+| --- | --- | --- |
+| React | all UI components | state, rendering, event handling |
+| React DOM | `main.jsx` | mounts app to DOM |
+| Vite | dev/build tool | serves frontend quickly during dev |
+| TailwindCSS | `index.css`, JSX classes | utility-first styling |
+| Axios | `src/api/api.js`, components | HTTP client for backend |
+| FormData | upload components | sends PDFs as multipart requests |
+| `window.open` | InsightsPanel | opens stored PDFs in new tab |
+| `<input type="file">` | upload components | file selection from user |
+
+
+===============================================================================
+4. BACKEND STARTUP FLOW
+===============================================================================
+
+  Terminal command
+    `uvicorn app.main:app --reload`
+        |
+        v
+  {Uvicorn}
+        |
+        v
+  [app/main.py]
+        |
+        +--> create FastAPI app
+        +--> configure CORS middleware
+        +--> include routers:
+        |      - match_router
+        |      - document_router
+        |      - system_router
+        |      - tender_router
+        |      - resume_router
+        |
+        +--> startup event: `init_db()`
+               |
+               v
+      [app/database/connection.py]
+               |
+               +--> {python-dotenv} load `.env`
+               +--> {SQLAlchemy} create engine
+               +--> choose connect args
+               +--> create SessionLocal
+               +--> import models
+               +--> `Base.metadata.create_all()`
+
+
+Frameworks active at startup
+
+| Library / Framework | Activation point | Runtime role |
+| --- | --- | --- |
+| Uvicorn | server start | ASGI server |
+| FastAPI | `app/main.py` | route framework |
+| CORSMiddleware | `app/main.py` | browser cross-origin support |
+| python-dotenv | DB and LLM modules | load env variables |
+| SQLAlchemy | DB connection init | ORM and session management |
+| sqlite3 | SQLite vacuum | DB maintenance |
+| Pydantic | route models and document models | request/response validation shapes |
+
+
+===============================================================================
+5. TENDER UPLOAD FLOWCHART
+===============================================================================
+
+USER SIDE
+
+  User selects tender PDF
+      |
+      v
+  [TenderUpload.jsx]
+      |
+      +--> `useRef` stores file input ref
+      +--> `useState` stores selected file/result/loading
+      +--> {Browser FormData} append `file`
+      +--> {Axios} POST `/tenders/upload`
+      |
+      v
+
+BACKEND SIDE
+
+  [app/api/tender_routes.py]
+      |
+      v
+  FastAPI route function `upload_tender(file: UploadFile = File(...))`
+      |
+      v
+  [app/services/tender_service.py]
+      |
+      v
+  `process_uploaded_document(file, document_type="tender")`
+      |
+      +--> [Step 1] validate `document_type`
+      |
+      +--> [Step 2] read file bytes
+      |
+      +--> [Step 3] validate upload
+      |        |
+      |        v
+      |   [app/utils/file_validator.py]
+      |        |
+      |        +--> extension check
+      |        +--> size check
+      |        +--> content-type check
+      |        +--> PDF signature `%PDF` check
+      |        +--> {PyMuPDF / fitz} open file to confirm readable pages
+      |
+      +--> [Step 4] compute SHA256
+      |        |
+      |        v
+      |   [app/utils/file_hash.py]
+      |        |
+      |        +--> {hashlib}
+      |
+      +--> [Step 5] duplicate lookup
+      |        |
+      |        v
+      |   [app/services/document_repository.py]
+      |        |
+      |        +--> {SQLAlchemy} select Document by type + hash
+      |
+      +--> (?) duplicate exists and not failed?
+      |        |
+      |        +--> YES
+      |        |     |
+      |        |     +--> update document status to stored
+      |        |     +--> load persisted chunks from DB
+      |        |     +--> rename chunk metadata filename
+      |        |     +--> invalidate FAISS files
+      |        |     +--> return reused structured_data + evidence_map
+      |        |
+      |        +--> NO
+      |              |
+      |              +--> continue normal ingestion
+      |
+      +--> [Step 6] save file
+      |        |
+      |        v
+      |   [app/utils/file_storage.py]
+      |        |
+      |        +--> sanitize filename with {re}
+      |        +--> prefix with timestamp via {datetime}
+      |        +--> write bytes with {os}
+      |
+      +--> [Step 7] create Document DB row with status="processing"
+      |        |
+      |        +--> {SQLAlchemy}
+      |
+      +--> [Step 8] extract page text
+      |        |
+      |        v
+      |   [app/rag/loader.py]
+      |        |
+      |        +--> try {pymupdf4llm + fitz}
+      |        +--> else try {fitz / PyMuPDF}
+      |        +--> else try {pdfplumber}
+      |        +--> else try {Docling}
+      |        +--> else try OCR:
+      |        |      {fitz} render page -> {Pillow} image -> {pytesseract} OCR
+      |        +--> output = Pydantic `ExtractedDocument(pages=[PageText...])`
+      |
+      +--> [Step 9] clean pages
+      |        |
+      |        v
+      |   [app/rag/cleaner.py]
+      |        |
+      |        +--> {re + Counter}
+      |        +--> detect repeated headers/footers
+      |        +--> remove page numbers
+      |
+      +--> [Step 10] flatten pages to full text
+      |
+      +--> (?) full text empty?
+      |        |
+      |        +--> YES -> update document status failed -> return invalid
+      |        +--> NO
+      |
+      +--> [Step 11] build semantic chunks
+      |        |
+      |        v
+      |   [app/rag/chunker.py]
+      |        |
+      |        +--> [app/rag/semantic_structurer.py]
+      |        |      |
+      |        |      +--> {re} detect tender sections:
+      |        |             eligibility / qualifications / experience /
+      |        |             responsibilities / personnel / commercial / general
+      |        |
+      |        +--> split text into 800-word chunks with 150 overlap
+      |
+      +--> (?) no chunks?
+      |        |
+      |        +--> YES -> update document failed
+      |        +--> NO
+      |
+      +--> [Step 12] store chunk vectors
+      |        |
+      |        v
+      |   [app/rag/vector_store.py]
+      |        |
+      |        +--> create embeddings
+      |        |      |
+      |        |      v
+      |        |   [app/rag/embeddings.py]
+      |        |      |
+      |        |      +--> {sentence-transformers} load `BAAI/bge-small-en`
+      |        |      +--> {numpy} cast vectors
+      |        |      +--> if unavailable: {hashlib} deterministic hash embedding
+      |        |
+      |        +--> {FAISS} create/load index
+      |        +--> {pickle} save metadata
+      |
+      +--> [Step 13] persist chunk records in SQL
+      |        |
+      |        +--> replace DocumentChunk rows
+      |
+      +--> [Step 14] structured extraction
+      |        |
+      |        v
+      |   [app/extraction/tender_extractor.py]
+      |        |
+      |        +--> heuristic extraction with {re}
+      |        +--> call LLM extraction wrapper
+      |               |
+      |               v
+      |           [app/llm/tender_llm_extractor.py]
+      |               |
+      |               +--> build prompt
+      |               +--> use Pydantic schema `TenderRequirements`
+      |               +--> call `llm_json_extract()`
+      |                       |
+      |                       v
+      |                   [app/llm/provider.py]
+      |                       |
+      |                       +--> {python-dotenv} env load
+      |                       +--> {urllib.request} call Ollama `/api/chat`
+      |                       +--> {json} parse response
+      |                       +--> fallback to schema-shaped JSON on failure
+      |
+      +--> [Step 15] evidence mapping
+      |        |
+      |        v
+      |   [app/services/evidence_service.py]
+      |        |
+      |        +--> compare field values against chunks
+      |        +--> keep best snippet + page + section + confidence
+      |
+      +--> [Step 16] update Document row status="stored"
+      |
+      +--> [Step 17] return response JSON
+      |
+      v
+
+FRONTEND RENDER
+
+  [TenderUpload.jsx]
+      |
+      +--> stores result locally
+      +--> tells App new `activeTenderDocumentId`
+      +--> `InsightsPanel.jsx` can display structured JSON and evidence map
+
+
+===============================================================================
+6. RESUME UPLOAD FLOWCHART
+===============================================================================
+
+6.1 Single resume upload
+
+  User selects one resume PDF
+      |
+      v
+  [ResumeUpload.jsx]
+      |
+      +--> stores file list in React state
+      +--> builds `FormData`
+      +--> {Axios} POST `/resumes/upload`
+      |
+      v
+  [app/api/resume_routes.py]
+      |
+      v
+  [app/services/resume_service.py] -> `process_resume()`
+      |
+      v
+  [app/services/document_ingestion.py]
+      |
+      +--> same ingestion pipeline as tender
+      +--> difference:
+      |      document_type = "resume"
+      |      upload directory = `uploads/resumes`
+      |      index name = `resume`
+      |      extractor = `extract_resume_data()`
+      |
+      v
+  response JSON ==> candidate structured data + evidence map + document_id
+
+
+6.2 Multiple resume upload
+
+  User selects multiple resume PDFs
+      |
+      v
+  [ResumeUpload.jsx]
+      |
+      +--> browser-side de-duplication by `file.name + file.size`
+      +--> {Axios} POST `/resumes/upload-multiple`
+      |
+      v
+  [app/api/resume_routes.py]
+      |
+      v
+  [app/services/resume_service.py] -> `process_multiple_resumes(files)`
+      |
+      +--> loop each file
+      +--> call `process_uploaded_document(..., "resume")`
+      +--> if status in {"stored", "duplicate"} --> processed list
+      +--> else --> failed list
+      |
+      v
+  response JSON
+      |
+      +--> total_files
+      +--> processed_files
+      +--> failed_files
+      +--> processed[]
+      +--> failed[]
+
+
+Resume extraction library path
+
+  [app/extraction/resume_extractor.py]
+      |
+      +--> {re + datetime + html}
+      +--> heuristics for:
+      |      candidate_name
+      |      role
+      |      domain
+      |      skills
+      |      experience
+      |      projects
+      |
+      +--> LLM resume extractor
+              |
+              v
+          [app/llm/resume_llm_extractor.py]
+              |
+              +--> Pydantic `ResumeProfile`
+              +--> Ollama JSON extraction
+
+
+===============================================================================
+7. PDF EXTRACTION DECISION TREE
+===============================================================================
+
+                           +-----------------------------------+
+                           | load_pdf_pages(file_bytes, name)  |
+                           +-----------------+-----------------+
+                                             |
+                                             v
+                           +-----------------------------------+
+                           | Try PyMuPDF family first          |
+                           +-----------------+-----------------+
+                                             |
+                   +-------------------------+------------------------+
+                   |                                                  |
+                   v                                                  v
+       +------------------------------+                  +------------------------------+
+       | {pymupdf4llm + fitz}         |                  | {fitz / PyMuPDF}            |
+       | page_chunks=True             |                  | plain text extraction        |
+       +---------------+--------------+                  +---------------+--------------+
+                       |                                                 |
+                       +-------------------------+-----------------------+
+                                                 |
+                                                 v
+                            +--------------------------------------+
+                            | Compare extracted text length        |
+                            | choose better PyMuPDF result         |
+                            +------------------+-------------------+
+                                               |
+                                               v
+                            +--------------------------------------+
+                            | Is text meaningful?                  |
+                            | `_has_meaningful_text()`             |
+                            +------------------+-------------------+
+                                               |
+                            +------------------+-------------------+
+                            |                                      |
+                            v                                      v
+                 +-------------------------+            +-------------------------------+
+                 | YES -> use this backend |            | NO -> fallback pipeline       |
+                 +-------------------------+            +---------------+---------------+
+                                                                       |
+                                                                       v
+                     +--------------------+--------------------+--------------------+
+                     |                    |                    |                    |
+                     v                    v                    v                    v
+          +------------------+  +------------------+  +------------------+  +------------------+
+          | {pdfplumber}     |  | {Docling}        |  | OCR path         |  | no backend works |
+          | text extraction  |  | markdown export  |  | {fitz}+{Pillow}+ |  | return empty     |
+          | page by page     |  | single text blob |  | {pytesseract}    |  | ExtractedDocument|
+          +------------------+  +------------------+  +------------------+  +------------------+
+
+
+Meaningful text check details
+
+  raw pages
+    --> flatten text
+    --> strip whitespace noise
+    --> remove "picture intentionally omitted" noise
+    --> remove non-letter symbols
+    --> require enough token count
+
+
+===============================================================================
+8. CHUNK / EMBED / STORE FLOW
+===============================================================================
+
+  Cleaned pages
+      |
+      v
+  [semantic_structurer.py]
+      |
+      +--> detect section headings with {re}
+      +--> produce blocks:
+      |      section + page_start + page_end + text
+      |
+      v
+  [chunker.py]
+      |
+      +--> split each block into chunks
+      +--> chunk_size = 800 words
+      +--> overlap = 150 words
+      +--> attach metadata:
+             filename
+             chunk_id
+             document_id
+             document_type
+             section
+             page_start
+             page_end
+             embedding_backend
+      |
+      v
+  [vector_store.py]
+      |
+      +--> `embed_texts([chunk["text"] ...])`
+      |        |
+      |        v
+      |   [embeddings.py]
+      |        |
+      |        +--> {SentenceTransformer}
+      |        +--> {numpy}
+      |        +--> fallback hash embedding if model missing
+      |
+      +--> {FAISS IndexFlatL2}.add(vectors)
+      +--> {pickle} metadata append/save
+      |
+      v
+  SQL persistence
+      |
+      +--> replace `DocumentChunk` rows in SQLite
+
+
+FAISS rebuild path
+
+  Search request
+      |
+      v
+  `load_index(index_name)`
+      |
+      +--> if `.faiss` or metadata file missing
+      |      |
+      |      +--> fetch chunks from SQL DB
+      |      +--> re-embed texts
+      |      +--> rebuild FAISS + pickle metadata
+      |
+      +--> return in-memory index + metadata list
+
+
+===============================================================================
+9. STRUCTURED EXTRACTION FLOW
+===============================================================================
+
+9.1 Tender structured extraction
+
+  Full tender text
+      |
+      v
+  [tender_extractor.py]
+      |
+      +--> heuristic extraction
+      |      |
+      |      +--> role heuristic
+      |      +--> domain heuristic
+      |      +--> required skill patterns
+      |      +--> preferred skill markers
+      |      +--> experience regex near personnel terms
+      |      +--> coarse qualifications/responsibilities
+      |
+      +--> LLM extraction
+      |      |
+      |      +--> `TenderRequirements.model_json_schema()`
+      |      +--> Ollama JSON extraction
+      |
+      +--> merge heuristic + LLM
+      |
+      v
+  final tender structured data
+
+
+9.2 Resume structured extraction
+
+  Full resume text
+      |
+      v
+  [resume_extractor.py]
+      |
+      +--> name extraction heuristics
+      |      |
+      |      +--> label-near-value search
+      |      +--> extract-between-labels
+      |      +--> scored top-line candidates
+      |
+      +--> role extraction heuristics
+      |      |
+      |      +--> labels: position / role / profession
+      |      +--> summary pattern
+      |      +--> top-header job-title pattern
+      |
+      +--> skill keyword matching
+      +--> experience regex and date-range parsing
+      +--> project regex extraction
+      |
+      +--> LLM extraction
+      |      |
+      |      +--> `ResumeProfile.model_json_schema()`
+      |      +--> Ollama JSON extraction
+      |
+      +--> merge heuristic + LLM
+      |
+      v
+  final resume structured data
+
+
+===============================================================================
+10. EVIDENCE MAP FLOW
+===============================================================================
+
+  structured_data fields
+      |
+      v
+  [evidence_service.py]
+      |
+      +--> for each field:
+      |      |
+      |      +--> inspect all chunks
+      |      +--> exact substring match?
+      |      +--> else token overlap score
+      |      +--> keep best chunk
+      |
+      +--> build evidence entry:
+      |      value
+      |      source_text snippet
+      |      page
+      |      section
+      |      confidence
+      |
+      v
+  evidence_map JSON
+
+
+Example evidence entry shape
+
+  {
+    "value": "Python",
+    "source_text": "...Python FastAPI NLP...",
+    "page": 2,
+    "section": "skills",
+    "confidence": 0.98
+  }
+
+
+===============================================================================
+11. QUERY ROUTER FLOW
+===============================================================================
+
+  User types question in [AskAgent.jsx]
+      |
+      +--> includes:
+      |      query
+      |      tender_document_id
+      |      resume_document_ids
+      |      restrict_to_active_uploads=true
+      |
+      v
+  POST /match/
+      |
+      v
+  [app/api/match_routes.py]
+      |
+      +--> Pydantic `MatchRequest`
+      |
+      v
+  [app/services/query_service.py] -> `answer_query()`
+      |
+      +--> build active_documents_by_type
+      +--> determine if tender/resume data exists
+      +--> `classify_query_intent(query, has_tender, has_resume)`
+      |
+      +--> (?) mode
+             |
+             +--> `matching`
+             |      |
+             |      v
+             |   [matching_service.py]
+             |
+             +--> `qa`
+             |      |
+             |      v
+             |   `_answer_qa()`
+             |
+             +--> `none`
+                    |
+                    v
+                 return "No uploaded documents found"
+
+
+Intent classifier keyword logic
+
+  Query contains matching-style words?
+  - match
+  - shortlist
+  - top candidate
+  - best resume
+  - find candidates
+  - rank resume
+
+If yes and both tender + resume exist
+  --> mode = matching
+
+Else
+  --> mode = QA with scope:
+      tender / resume / both
+
+
+===============================================================================
+12. QA FLOWCHART
+===============================================================================
+
+  [query_service.py] -> `_answer_qa(query, scope, ...)`
+      |
+      +--> map scope:
+      |      tender -> ["tender"]
+      |      resume -> ["resume"]
+      |      both   -> ["tender", "resume"]
+      |
+      +--> `_gather_scope_context()`
+      |      |
+      |      +--> `_search_scope_matches()`
+      |      |      |
+      |      |      +--> for each document type:
+      |      |             `search_tender_vectors_hybrid()` or
+      |      |             `search_resume_vectors_hybrid()`
+      |      |
+      |      +--> filter by active document IDs if provided
+      |      +--> resolve latest doc fallback when needed
+      |      +--> load chunk windows
+      |      +--> collect structured contexts from DB
+      |
+      +--> (?) chunks found?
+      |      |
+      |      +--> NO -> return "No uploaded documents are available"
+      |      +--> YES
+      |
+      +--> build QA prompt
+      |      |
+      |      v
+      |   [query_agent.py]
+      |      |
+      |      +--> render structured JSON
+      |      +--> render retrieved context blocks with filename/page/section
+      |
+      +--> `llm_text_answer(prompt)`
+      |      |
+      |      v
+      |   [llm/provider.py]
+      |      |
+      |      +--> Ollama text request
+      |      +--> if failure -> empty string
+      |
+      +--> (?) answer empty?
+      |      |
+      |      +--> YES -> `build_fallback_answer()`
+      |      +--> NO
+      |
+      +--> return:
+             mode=qa
+             query_scope
+             answer_text
+             sources
+             matches=[]
+             reasoning_summary=""
+
+
+Hybrid search internals
+
+  [vector_store.py] -> `search_index_hybrid(index_name, query_text, top_k, ...)`
+      |
+      +--> semantic search branch
+      |      |
+      |      +--> embed query
+      |      +--> FAISS nearest neighbors
+      |
+      +--> lexical search branch
+      |      |
+      |      +--> tokenize query and chunk text
+      |      +--> compute keyword overlap score
+      |
+      +--> reciprocal rank fusion
+      |
+      v
+  ranked hybrid results
+
+
+===============================================================================
+13. MATCHING FLOWCHART
+===============================================================================
+
+  [query_service.py] detects `mode="matching"`
+      |
+      v
+  [matching_service.py] -> `match_resumes_with_uploaded_tender(query, ...)`
+      |
+      +--> derive active scope
+      |      |
+      |      +--> active tender document?
+      |      +--> active resume documents?
+      |
+      +--> (?) missing tender under active scope?
+      |      |
+      |      +--> YES -> return "No uploaded tender data found"
+      |
+      +--> (?) missing resumes under active scope?
+      |      |
+      |      +--> YES -> return "No uploaded resume data found"
+      |
+      +--> choose primary tender
+      |      |
+      |      +--> if active tender exists -> use it
+      |      +--> else vector search tender index top_k=5
+      |
+      +--> load tender chunks
+      |      |
+      |      +--> from persisted DB chunks if available
+      |      +--> else from FAISS metadata by filename/document_id
+      |
+      +--> load or extract tender structured data
+      |      |
+      |      +--> if Document.structured_data exists -> reuse
+      |      +--> else extract from tender text and update DB
+      |
+      +--> build better resume search query from tender data
+      |      |
+      |      +--> role + domain + required skills + preferred skills + years
+      |
+      +--> choose resume candidates
+      |      |
+      |      +--> if active resume IDs provided -> use exactly those docs
+      |      +--> else vector search resume index top_k=10
+      |
+      +--> loop candidate resumes
+      |      |
+      |      +--> resolve actual Document row
+      |      +--> skip duplicates by candidate key
+      |      +--> load candidate chunks
+      |      +--> load or extract resume structured data
+      |      +--> repair candidate name/role if needed
+      |      +--> score candidate
+      |      +--> build short resume excerpt
+      |      +--> append result item
+      |
+      +--> sort results by `(score, experience_match)` descending
+      |
+      +--> LangGraph reasoning
+      |      |
+      |      v
+      |   [graph/matching_graph.py]
+      |      |
+      |      +--> START -> reasoning_agent -> END
+      |      |
+      |      v
+      |   [agents/reasoning_agent.py]
+      |      |
+      |      +--> add text explanation per candidate
+      |      +--> create shortlist summary
+      |
+      +--> return matching payload
+      |
+      v
+  frontend renders ranked profiles
+
+
+===============================================================================
+14. RESUME NAME / ROLE REPAIR FLOW
+===============================================================================
+
+Why this flow exists
+- Resume extraction may miss or misread `candidate_name` or `role`.
+- Matching service repairs that before final scoring/display.
+
+Flow
+
+  candidate structured_data from DB or fresh extraction
+      |
+      v
+  [resume_name_service.py] -> `repair_resume_structured_data()`
+      |
+      +--> try from loaded chunks first
+      |      |
+      |      +--> `extract_candidate_name(chunk.text)`
+      |      +--> `extract_candidate_role(chunk.text)`
+      |
+      +--> else try from structured context values
+      |
+      +--> else try combined chunk text
+      |
+      +--> else reopen stored PDF from disk
+      |      |
+      |      +--> read file bytes
+      |      +--> call `load_pdf_pages()` again
+      |      +--> inspect page text one by one
+      |
+      +--> if repaired:
+             update Document.structured_data
+             rebuild evidence map
+             optionally override name/role evidence with better chunk
+
+
+===============================================================================
+15. DETERMINISTIC SCORING FLOW
+===============================================================================
+
+  tender_data + resume_data
+      |
+      v
+  [matching_service.py] -> `_score_candidate()`
+      |
+      +--> normalize phrases
+      +--> match required skills against candidate skills
+      +--> compute missing skills
+      +--> match preferred skills
+      +--> compare role
+      +--> compare domain
+      +--> compare candidate experience >= required experience
+      |
+      +--> numeric score:
+      |      required skill score   = matched_required / total_required * 70
+      |      preferred skill score  = matched_preferred / total_preferred * 10
+      |      role score             = 10 if role match else 0
+      |      domain score           = 10 if domain match else 0
+      |      experience score       = 10 if candidate >= required else 0
+      |      final score            = min(total, 100)
+      |
+      +--> verdict:
+             if score >= 80 and experience_match -> Highly Suitable
+             elif score >= 50                    -> Partially Suitable
+             else                                -> Low Suitable
+
+
+Scoring diagram
+
+  Required Skills ---------------------- up to 70
+  Preferred Skills --------------------- up to 10
+  Role Match --------------------------- up to 10
+  Domain Match ------------------------- up to 10
+  Experience Match --------------------- up to 10
+                                      ----------
+                                      max 100
+
+
+===============================================================================
+16. LANGGRAPH REASONING FLOW
+===============================================================================
+
+Current graph is intentionally simple
+
+  [build_matching_graph()]
+      |
+      +--> create `StateGraph(MatchingState)`
+      +--> add node `reasoning_agent`
+      +--> connect START -> reasoning_agent -> END
+      |
+      v
+  compiled graph
+
+
+At runtime
+
+  matches already scored deterministically
+      |
+      v
+  graph.invoke({
+    "query": query,
+    "tender_requirements": tender_data,
+    "matches": results
+  })
+      |
+      v
+  [reasoning_agent.py]
+      |
+      +--> for each match:
+      |      build explanation text:
+      |      matched skills
+      |      experience comparison
+      |      missing skills
+      |      score + verdict
+      |
+      +--> create shortlist names
+      +--> create rejected names
+      +--> create summary sentence
+      |
+      v
+  enriched matches + reasoning_summary
+
+
+===============================================================================
+17. STORAGE FLOWCHART
+===============================================================================
+
+                               +---------------------------+
+                               | Document uploaded         |
+                               +-------------+-------------+
+                                             |
+                  +--------------------------+---------------------------+
+                  |                                                          |
+                  v                                                          v
+     +----------------------------+                            +----------------------------+
+     | File system storage        |                            | Database storage           |
+     | `uploads/tenders/`         |                            | SQLite `tender_rag.db`     |
+     | `uploads/resumes/`         |                            +-------------+--------------+
+     +-------------+--------------+                                          |
+                   |                                                         |
+                   |                                                         v
+                   |                                         +------------------------------+
+                   |                                         | `documents` table            |
+                   |                                         | metadata + structured_data   |
+                   |                                         | evidence_map                 |
+                   |                                         +--------------+---------------+
+                   |                                                        |
+                   |                                                        v
+                   |                                         +------------------------------+
+                   |                                         | `document_chunks` table      |
+                   |                                         | chunk text + page + section  |
+                   |                                         +------------------------------+
+                   |
+                   v
+     +-----------------------------+
+     | Vector storage              |
+     | `vector_store/*.faiss`      |
+     | `vector_store/*_metadata`   |
+     +-----------------------------+
+
+
+Storage ownership idea
+
+  original PDF bytes      -> filesystem
+  vector similarity index -> FAISS files
+  document registry       -> SQLite
+  chunk metadata          -> SQLite + pickle metadata
+  structured outputs      -> SQLite JSON columns
+  evidence map            -> SQLite JSON columns
+
+
+===============================================================================
+18. CLEAR DATABASE FLOW
+===============================================================================
+
+  User clicks "Clear Database"
+      |
+      v
+  [App.jsx] confirm popup
+      |
+      +--> if cancel -> stop
+      +--> if confirm -> POST `/system/clear-database`
+      |
+      v
+  [app/api/system_routes.py]
+      |
+      v
+  [app/services/system_service.py]
+      |
+      +--> `delete_all_documents()`
+      |      |
+      |      +--> {SQLAlchemy} delete DocumentChunk
+      |      +--> {SQLAlchemy} delete Document
+      |
+      +--> delete files from:
+      |      `uploads/tenders`
+      |      `uploads/resumes`
+      |      `vector_store`
+      |      with preserved filenames:
+      |      `__init__.py`, `.gitkeep`
+      |
+      +--> `vacuum_sqlite_database()`
+      |      |
+      |      +--> {sqlite3} checkpoint + vacuum
+      |
+      v
+  return cleanup counts
+      |
+      v
+  [App.jsx] resets UI state
+
+
+===============================================================================
+19. PDF OPEN FLOW
+===============================================================================
+
+  User clicks profile row / "Open Resume" / "Open Tender"
+      |
+      v
+  [InsightsPanel.jsx]
+      |
+      +--> `getDocumentFileUrl(documentId)`
+      +--> browser `window.open(url, "_blank")`
+      |
+      v
+  GET `/documents/{document_id}/file`
+      |
+      v
+  [app/api/document_routes.py]
+      |
+      v
+  [app/services/document_service.py]
+      |
+      +--> fetch document by ID from DB
+      +--> confirm stored_path exists on disk
+      +--> return FastAPI `FileResponse`
+      +--> set `Content-Disposition: inline`
+      |
+      v
+  Browser displays original PDF
+
+
+===============================================================================
+20. LIBRARY / FRAMEWORK ACTIVATION TIMELINE
+===============================================================================
+
+This section answers: "When exactly does each library get involved?"
+
+20.1 Frontend libraries
+
+| Library / Framework | Activated when | Used in files | What it does |
+| --- | --- | --- | --- |
+| React | app load and every UI interaction | `main.jsx`, `App.jsx`, components | component rendering, state |
+| React DOM | app startup | `main.jsx` | mount app in browser |
+| Vite | frontend dev/build | `vite.config.js` | dev server and bundling |
+| TailwindCSS | during frontend rendering/build | `index.css`, JSX class names | utility styling |
+| Axios | any backend call | `api.js`, components | HTTP requests |
+| Browser FormData | during upload | upload components | multipart body creation |
+
+
+20.2 Backend frameworks
+
+| Library / Framework | Activated when | Used in files | What it does |
+| --- | --- | --- | --- |
+| Uvicorn | backend startup | terminal command | serves FastAPI app |
+| FastAPI | backend startup and every request | `main.py`, `api/*.py` | route handling |
+| Pydantic | request parsing, schemas, page models | route models, `llm/schemas.py`, `models/*.py` | data validation and schema generation |
+| CORSMiddleware | backend startup | `main.py` | browser cross-origin access |
+| python-multipart | during file upload parsing | FastAPI internals | multipart form handling |
+
+
+20.3 Persistence and environment
+
+| Library | Activated when | Used in files | What it does |
+| --- | --- | --- | --- |
+| python-dotenv | DB/LLM module import | `database/connection.py`, `llm/provider.py` | loads `.env` |
+| SQLAlchemy | DB startup and DB operations | `database/connection.py`, `document_repository.py`, `db_models.py` | ORM + sessions |
+| sqlite3 | database vacuum | `database/connection.py` | compacts SQLite DB |
+| psycopg2-binary | only if DATABASE_URL points to Postgres | dependency only | currently inactive in default SQLite setup |
+
+
+20.4 Extraction libraries
+
+| Library | Activated when | Used in files | What it does |
+| --- | --- | --- | --- |
+| PyMuPDF / `fitz` | PDF validation and extraction | `file_validator.py`, `loader.py` | open PDFs, read text, render pages |
+| PyMuPDF4LLM | first extraction attempt | `loader.py` | page-chunk markdown extraction |
+| pdfplumber | fallback extraction | `loader.py` | alternate text extraction |
+| Docling | fallback extraction if installed | `loader.py` | document conversion to markdown |
+| Pillow | OCR fallback | `loader.py` | image creation from page pixmaps |
+| pytesseract | OCR fallback | `loader.py` | OCR on rasterized pages |
+
+
+20.5 Retrieval and vector libraries
+
+| Library | Activated when | Used in files | What it does |
+| --- | --- | --- | --- |
+| sentence-transformers | embedding creation | `embeddings.py` | text-to-vector model |
+| numpy | embedding array handling | `embeddings.py`, `vector_store.py` | vector numeric arrays |
+| FAISS | vector storage and search | `vector_store.py` | nearest-neighbor search |
+| pickle | FAISS metadata save/load | `vector_store.py` | metadata persistence |
+
+
+20.6 LLM and reasoning libraries
+
+| Library | Activated when | Used in files | What it does |
+| --- | --- | --- | --- |
+| urllib.request | Ollama HTTP call | `llm/provider.py` | sends request to local Ollama |
+| json | prompt/response shaping | `llm/provider.py`, `query_agent.py` | encode/decode JSON |
+| LangGraph | match reasoning step | `graph/matching_graph.py` | graph wrapper for reasoning agent |
+
+
+20.7 Standard library helpers with important roles
+
+| Module | Where | Why important |
+| --- | --- | --- |
+| `hashlib` | hashing + hash embeddings | dedupe and embedding fallback |
+| `re` | many files | extraction, cleanup, section detection, validation |
+| `os` | many files | file paths, existence, deletion |
+| `datetime` | storage names, timestamps, date parsing | filenames and metadata |
+| `collections.Counter` | cleaner | repeated header/footer detection |
+
+
+===============================================================================
+21. CODE FILE DEPENDENCY VIEW
+===============================================================================
+
+FRONTEND FILE DEPENDENCY MAP
+
+  `main.jsx`
+      --> `App.jsx`
+
+  `App.jsx`
+      --> `api/api.js`
+      --> `components/ResumeUpload.jsx`
+      --> `components/TenderUpload.jsx`
+      --> `components/AskAgent.jsx`
+      --> `components/InsightsPanel.jsx`
+
+  `components/ResumeUpload.jsx`
+      --> `api/api.js`
+
+  `components/TenderUpload.jsx`
+      --> `api/api.js`
+
+  `components/AskAgent.jsx`
+      --> `api/api.js`
+
+  `components/InsightsPanel.jsx`
+      --> `api/api.js`
+
+
+BACKEND FILE DEPENDENCY MAP
+
+  `app/main.py`
+      --> `app/api/*`
+      --> `app/database/connection.py`
+
+  `app/api/tender_routes.py`
+      --> `app/services/tender_service.py`
+
+  `app/api/resume_routes.py`
+      --> `app/services/resume_service.py`
+
+  `app/api/match_routes.py`
+      --> `app/services/query_service.py`
+
+  `app/api/document_routes.py`
+      --> `app/services/document_service.py`
+
+  `app/api/system_routes.py`
+      --> `app/services/system_service.py`
+
+  `app/services/tender_service.py`
+      --> `app/services/document_ingestion.py`
+
+  `app/services/resume_service.py`
+      --> `app/services/document_ingestion.py`
+
+  `app/services/document_ingestion.py`
+      --> `app/extraction/resume_extractor.py`
+      --> `app/extraction/tender_extractor.py`
+      --> `app/rag/chunker.py`
+      --> `app/rag/cleaner.py`
+      --> `app/rag/loader.py`
+      --> `app/rag/vector_store.py`
+      --> `app/services/document_repository.py`
+      --> `app/services/evidence_service.py`
+      --> `app/utils/file_hash.py`
+      --> `app/utils/file_storage.py`
+      --> `app/utils/file_validator.py`
+
+  `app/services/query_service.py`
+      --> `app/agents/query_agent.py`
+      --> `app/llm/provider.py`
+      --> `app/rag/resume_retriever.py`
+      --> `app/rag/tender_retriever.py`
+      --> `app/rag/vector_store.py`
+      --> `app/services/document_repository.py`
+      --> `app/services/matching_service.py`
+
+  `app/services/matching_service.py`
+      --> `app/extraction/resume_extractor.py`
+      --> `app/extraction/tender_extractor.py`
+      --> `app/graph/matching_graph.py`
+      --> `app/rag/resume_retriever.py`
+      --> `app/rag/tender_retriever.py`
+      --> `app/services/document_repository.py`
+      --> `app/services/evidence_service.py`
+      --> `app/services/resume_name_service.py`
+
+
+===============================================================================
+22. "IF USER DOES X, WHAT CODE RUNS?" QUICK MAP
+===============================================================================
+
+User action: open app
+  -> `tender-ui/index.html`
+  -> `src/main.jsx`
+  -> `src/App.jsx`
+
+User action: upload tender
+  -> `src/components/TenderUpload.jsx`
+  -> `POST /tenders/upload`
+  -> `app/api/tender_routes.py`
+  -> `app/services/tender_service.py`
+  -> `app/services/document_ingestion.py`
+  -> extraction / chunk / store / structured extraction stack
+
+User action: upload 1 resume
+  -> `src/components/ResumeUpload.jsx`
+  -> `POST /resumes/upload`
+  -> `app/api/resume_routes.py`
+  -> `app/services/resume_service.py`
+  -> `app/services/document_ingestion.py`
+
+User action: upload many resumes
+  -> `src/components/ResumeUpload.jsx`
+  -> `POST /resumes/upload-multiple`
+  -> `app/api/resume_routes.py`
+  -> `app/services/resume_service.py`
+  -> loop over `app/services/document_ingestion.py`
+
+User action: ask tender/resume question
+  -> `src/components/AskAgent.jsx`
+  -> `POST /match/`
+  -> `app/api/match_routes.py`
+  -> `app/services/query_service.py`
+  -> QA path
+  -> hybrid retrieval + Ollama text answer
+
+User action: ask for shortlist/matching
+  -> `src/components/AskAgent.jsx`
+  -> `POST /match/`
+  -> `app/services/query_service.py`
+  -> matching path
+  -> `app/services/matching_service.py`
+  -> deterministic scoring + LangGraph reasoning
+
+User action: open a PDF
+  -> `src/components/InsightsPanel.jsx`
+  -> `/documents/{id}/file`
+  -> `app/services/document_service.py`
+
+User action: clear all data
+  -> `src/App.jsx`
+  -> `POST /system/clear-database`
+  -> `app/services/system_service.py`
+
+
+===============================================================================
+23. REAL CURRENT LIMITATION MAP
+===============================================================================
+
+These are not flow bugs in the diagram. They are the current design reality.
+
+1. Gemini path is not active in code today.
+  Docs mention Gemini, but `llm/provider.py` is currently Ollama-only.
+
+2. Postgres is not active in default setup.
+  SQLAlchemy supports non-SQLite DB URLs, but the shipped default is SQLite.
+
+3. Docling is optional.
+  `loader.py` imports it inside `try/except`, so the pipeline can run without it.
+
+4. Embedding model is local-only.
+  If `BAAI/bge-small-en` is not available locally, the app falls back to hashed
+  embeddings.
+
+5. LangGraph is minimal.
+  The graph has one node, not a multi-agent orchestration pipeline.
+
+6. Some files are placeholders or stale.
+  They exist in the repo, but are not in the active runtime path:
+  - `app/agents/resume_agent.py`
+  - `app/agents/scoring_agent.py`
+  - `app/agents/tender_agent.py`
+  - `app/llm/extractor.py`
+  - `tender-ui/src/App.css`
+  - `tender-ui/README.md`
+
+
+===============================================================================
+24. FINAL SUPER-SHORT MEMORY FLOW
+===============================================================================
+
+USER
+  -> React UI
+  -> Axios request
+  -> FastAPI route
+  -> Service orchestration
+
+UPLOAD PATH
+  -> validate PDF
+  -> SHA256 dedupe
+  -> save file
+  -> extract pages
+  -> clean
+  -> semantic sections
+  -> chunk
+  -> embed
+  -> FAISS store
+  -> SQLite store
+  -> structured extraction
+  -> evidence map
+
+QUERY PATH
+  -> classify intent
+  -> QA or Matching
+
+QA
+  -> hybrid retrieve
+  -> prompt Ollama
+  -> answer + sources
+
+MATCHING
+  -> load tender
+  -> retrieve resumes
+  -> extract/repair profiles
+  -> deterministic scoring
+  -> LangGraph reasoning
+  -> ranked results
+

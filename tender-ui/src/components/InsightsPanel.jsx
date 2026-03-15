@@ -96,7 +96,7 @@ export default function InsightsPanel({
           <div>
             <h2 className="text-2xl font-semibold text-white">Structured Outputs and Profiles</h2>
             <p className="mt-1 text-sm text-slate-400">
-              Upload ke baad extracted JSON yahan dikhega, aur matching ke baad ranked profiles yahin open honge.
+              Extracted JSON appears here after upload, and ranked profiles open here after matching.
             </p>
           </div>
 
@@ -167,7 +167,7 @@ export default function InsightsPanel({
             ) : (
               <EmptyState
                 title="No resume JSON yet"
-                description="Resume upload karo. Structured extraction yahan pretty JSON format me dikhegi."
+                description="Upload a resume to view its structured extraction in formatted JSON."
               />
             )}
           </>
@@ -200,7 +200,7 @@ export default function InsightsPanel({
             ) : (
               <EmptyState
                 title="No tender JSON yet"
-                description="Tender upload karoge to extracted requirement JSON yahan dikh jayega."
+                description="Upload a tender to view the extracted requirements in JSON."
               />
             )}
           </>
@@ -248,7 +248,7 @@ export default function InsightsPanel({
             ) : (
               <EmptyState
                 title="No ranked profiles yet"
-                description="Ask AI se matching run karo. Top-ranked resumes yahan line-wise sorted aayenge aur click karte hi PDF open hogi."
+                description="Run matching from Ask AI to view ranked resumes here and open each PDF directly."
               />
             )}
           </>
