@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.document_routes import router as document_router
 from app.api import resume_routes
 from app.api.match_routes import router as match_router
+from app.api.search_routes import router as search_router
 from app.api.system_routes import router as system_router
 from app.api.tender_routes import router as tender_router
 from app.database.connection import init_db
@@ -21,6 +22,7 @@ app.add_middleware(
 )
 
 app.include_router(match_router)
+app.include_router(search_router)
 app.include_router(document_router)
 app.include_router(system_router)
 app.include_router(tender_router)

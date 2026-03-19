@@ -4,11 +4,13 @@ pymupdf
 pymupdf4llm
 pdfplumber
 sentence-transformers
-faiss-cpu
 python-multipart
 sqlalchemy
 psycopg2-binary
+pgvector
+alembic
 python-dotenv
 pillow
 pytesseract
 langgraph
+pytest

@@ -1,7 +1,7 @@
 import os
 import shutil
 
-from app.database.connection import vacuum_sqlite_database
+from app.database.connection import database_health, vacuum_sqlite_database
 from app.services.document_repository import delete_all_documents
 
 
@@ -56,3 +56,9 @@ def clear_application_data() -> dict:
         "vector_entries_deleted": vector_entries_deleted,
         "database_compacted": database_compacted,
     }
+
+
+def get_system_health() -> dict:
+    health = database_health()
+    health["uploads_dirs"] = list(UPLOAD_DIRS)
+    return health

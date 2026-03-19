@@ -13,6 +13,7 @@ from app.services.document_repository import (
 )
 from app.services.evidence_service import build_evidence_map
 from app.services.resume_name_service import repair_resume_structured_data
+from app.services.search_service import search_resumes
 
 
 matching_graph = build_matching_graph()
@@ -428,7 +429,18 @@ def match_resumes_with_uploaded_tender(
             for document in active_resume_documents
         ]
     else:
-        resume_matches = search_resume_vectors(resume_search_query, top_k=10)
+        search_result = search_resumes(resume_search_query, page=1, page_size=10)
+        resume_matches = [
+            {
+                "document_id": item.get("document_id"),
+                "filename": None,
+                "text": item.get("summary_text", ""),
+                "score": item.get("score"),
+            }
+            for item in search_result.get("results", [])
+        ]
+        if not resume_matches:
+            resume_matches = search_resume_vectors(resume_search_query, top_k=10)
 
     if not resume_matches:
         return {

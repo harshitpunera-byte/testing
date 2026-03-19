@@ -1,1225 +1,434 @@
 TENDER RESUME MATCHING RAG SYSTEM
-FULL PROJECT WALKTHROUGH FOR INTERVIEW PREPARATION
+INTERVIEW GUIDE FOR THE CURRENT CODEBASE
 
 Purpose of this file
-- Explain what every important file does.
-- Show the real runtime flow from UI -> API -> services -> RAG -> DB/FAISS -> response.
-- Separate active code from placeholders, stale helpers, and old docs.
-- Give you short interview answers plus deeper technical detail.
+- Explain the current runtime architecture, not the older SQLite/FAISS version.
+- Give short interview answers that match the code now.
+- Separate active code paths from legacy or placeholder files.
 
 ===============================================================================
 1. ONE-LINE SUMMARY
 ===============================================================================
 
-This project is a FastAPI + React system that uploads tender PDFs and resume PDFs,
-extracts page-aware text from them, cleans and chunks that text, embeds chunks
-into FAISS, stores document/chunk metadata in SQLite through SQLAlchemy,
-extracts structured fields from both tender and resumes using heuristics plus
-Ollama-backed JSON extraction, and then either:
-
-1. answers questions over uploaded documents, or
-2. ranks resumes against the uploaded tender using deterministic scoring.
+This project is a FastAPI + React tender-resume matching system that uploads PDF
+documents, extracts page-aware text, chunks and embeds that text, stores
+documents and vectors in PostgreSQL with pgvector, extracts structured tender
+and resume fields, and then supports QA, structured resume search, and
+deterministic resume matching with reasoning summaries.
 
 
 ===============================================================================
-2. BEST INTERVIEW ANSWERS
+2. 30-SECOND ANSWER
 ===============================================================================
 
-30-second answer
-- I built a tender-resume matching RAG system. Users upload one tender and many
-  resumes as PDFs. The backend validates and deduplicates files using SHA256,
-  extracts page-wise text with multiple PDF fallbacks, cleans headers and
-  footers, creates semantic chunks, stores embeddings in FAISS, persists
-  structured outputs and chunks in SQLite, and then uses retrieval plus
-  deterministic scoring to shortlist candidates. The UI lets users upload files,
-  ask questions, and inspect extracted JSON and ranked profiles.
+- I built a tender-resume matching RAG system with a React frontend and FastAPI
+  backend.
+- Users upload one tender and multiple resumes as PDFs.
+- The backend validates files, deduplicates them with SHA256, extracts page-wise
+  text through multiple PDF fallbacks, cleans and chunks that text, and stores
+  both relational data and vector data in PostgreSQL with pgvector.
+- It extracts structured tender and resume data using heuristics plus an
+  Ollama-backed JSON extraction layer.
+- From there the app can answer questions over uploaded documents, run
+  structured resume search, or rank resumes against the uploaded tender using
+  deterministic scoring plus a lightweight reasoning summary.
 
-2-minute answer
-- The backend is FastAPI. Upload routes call a shared ingestion service. That
-  service validates PDF uploads, computes SHA256 for deduplication, saves files
-  locally, extracts page-level text using PyMuPDF4LLM or other fallbacks,
-  cleans repeated headers/footers, groups text into semantic sections, splits
-  those sections into overlapping chunks, embeds chunks with
-  `BAAI/bge-small-en` or a hash fallback, stores them in FAISS, and also stores
-  document and chunk metadata in SQLite through SQLAlchemy.
-- After chunk storage, the system runs hybrid extraction. First it applies
-  deterministic heuristics to pull fields like role, domain, skills, and
-  experience. Then it calls Ollama to get schema-shaped JSON and merges both
-  outputs.
-- When the user sends a query, the system first classifies intent. If it is a
-  normal question, it does hybrid retrieval over tender and/or resume chunks and
-  sends that context to the LLM for an answer. If it is a matching request, it
-  extracts or loads tender requirements, finds candidate resumes, extracts their
-  profile data, repairs missing candidate name and role if needed, computes a
-  deterministic score, and runs a small LangGraph reasoning step to add
-  explanations and a shortlist summary.
 
-What makes this project stronger than a basic demo
-- It is not only a chatbot. It has upload, validation, deduplication,
-  persistence, retrieval, structured extraction, evidence mapping, scoring, and
-  UI inspection.
-- It does not depend only on LLM output. It uses deterministic heuristics before
-  and after the LLM.
-- It is page-aware and stores chunk metadata, so answers and evidence can point
+===============================================================================
+3. 2-MINUTE ANSWER
+===============================================================================
+
+- The frontend is React with Vite and Tailwind. It uploads tenders and resumes,
+  sends queries, and shows extracted JSON, evidence, and ranked profiles.
+- The backend is FastAPI. Upload routes call a shared ingestion pipeline in
+  `app/services/document_ingestion.py`.
+- That pipeline validates PDFs, computes SHA256 for duplicate detection, saves
+  files under `uploads/`, extracts page-aware text with a fallback chain
+  including PyMuPDF4LLM, PyMuPDF, pdfplumber, Docling, and OCR, cleans page
+  noise, groups text into semantic sections, splits it into overlapping chunks,
+  and generates embeddings with `BAAI/bge-small-en` or a deterministic hash
+  fallback.
+- Chunks, structured JSON, normalized resume rows, and vector embeddings are
+  stored in PostgreSQL through SQLAlchemy and pgvector.
+- After storage, the system runs structured extraction. Heuristics run first,
+  then Ollama-backed schema-shaped extraction fills gaps, and evidence is mapped
   back to pages and sections.
+- On query, the backend classifies intent. QA uses hybrid retrieval over stored
+  chunks and asks Ollama for a context-grounded answer. Matching loads tender
+  requirements, retrieves candidate resumes, scores them deterministically, and
+  uses a small LangGraph step to add explanations and a shortlist summary.
 
 
 ===============================================================================
-3. REAL CURRENT ARCHITECTURE
+4. WHAT THE SYSTEM DOES TODAY
 ===============================================================================
 
-High-level architecture
+Active product scope
+- upload one tender PDF
+- upload one or many resume PDFs
+- validate files and reject invalid PDFs
+- deduplicate uploads by `document_type + SHA256`
+- store files under `uploads/`
+- extract page-aware text with multiple fallbacks
+- clean repeated headers/footers and page-number noise
+- detect semantic sections
+- chunk text with overlap
+- generate embeddings
+- persist data to PostgreSQL + pgvector
+- normalize resume data into relational tables
+- answer questions over uploaded documents
+- run structured resume search
+- rank resumes against a tender
+- return evidence and reasoning summaries
+
+
+===============================================================================
+5. HIGH-LEVEL ARCHITECTURE
+===============================================================================
 
   [React UI]
       |
-      |  axios HTTP calls
+      | Axios
       v
   [FastAPI Routes]
       |
       v
   [Service Layer]
       |
-      +--> [Upload/Ingestion Path]
-      |        |
-      |        +--> validate PDF
-      |        +--> SHA256 dedupe
-      |        +--> save file to uploads/
-      |        +--> extract page text
-      |        +--> clean pages
-      |        +--> semantic blocks
-      |        +--> chunking
-      |        +--> embeddings
-      |        +--> FAISS storage
-      |        +--> SQLAlchemy persistence
-      |        +--> structured extraction
-      |        +--> evidence map
+      +--> upload / ingestion
+      +--> query router
+      +--> structured search
+      +--> document serving
+      +--> system health / cleanup
       |
-      +--> [Query Path]
-               |
-               +--> classify intent
-               |      |
-               |      +--> QA flow
-               |      +--> Matching flow
-               |
-               +--> retrieval over FAISS
-               +--> structured data load from DB
-               +--> Ollama reasoning answer OR deterministic scoring
-               +--> response payload
-
-
-Physical storage used by the app
-
-  uploads/tenders/          -> saved tender PDFs
-  uploads/resumes/          -> saved resume PDFs
-  vector_store/*.faiss      -> FAISS vector indexes
-  vector_store/*_metadata   -> FAISS metadata pickle files
-  tender_rag.db             -> SQLite database for documents and chunks
-
-
-Data model relationship
-
-  Document
-    |
-    |  one-to-many
-    v
-  DocumentChunk
-
-  Document fields include:
-  - document_type
-  - original_filename
-  - stored_filename
-  - stored_path
-  - file_hash
-  - file_size
-  - status
-  - total_pages
-  - extraction_backend
-  - structured_data (JSON)
-  - evidence_map (JSON)
-
-  DocumentChunk fields include:
-  - document_id
-  - index_name
-  - chunk_id
-  - chunk_text
-  - section
-  - page_start
-  - page_end
-  - embedding_backend
-  - metadata_json
+      v
+  [RAG + Extraction Layer]
+      |
+      +--> PDF extraction
+      +--> cleaning
+      +--> semantic blocks
+      +--> chunking
+      +--> embeddings
+      +--> hybrid retrieval
+      |
+      v
+  [PostgreSQL + pgvector]
+      |
+      +--> documents
+      +--> document_chunks
+      +--> normalized resume tables
+      +--> evidence rows
+      +--> resume_search_index
 
 
 ===============================================================================
-4. END-TO-END FLOWS
+6. MAIN FLOWS
 ===============================================================================
 
-4.1 Backend startup flow
+6.1 Backend startup
+- `python -m uvicorn app.main:app --reload`
+- validate DB connection
+- verify/create `vector` extension
+- create tables
+- ensure pgvector and GIN indexes
 
-  uvicorn app.main:app --reload
-      |
-      v
-  app/main.py
-      |
-      +--> create FastAPI app
-      +--> add CORS
-      +--> include routers
-      +--> on startup call init_db()
-      |
-      v
-  app/database/connection.py
-      |
-      +--> load DATABASE_URL
-      +--> create SQLAlchemy engine/session
-      +--> Base.metadata.create_all()
+6.2 Upload flow
+- validate file
+- compute SHA256
+- reuse duplicate if already stored
+- save file to `uploads/`
+- create `documents` row
+- extract pages
+- clean pages
+- section + chunk
+- embed
+- persist `document_chunks`
+- structured extraction
+- persist normalized profile rows for resumes
+- persist evidence
+- update `documents` to `stored`
 
+6.3 QA flow
+- intent classified as `qa`
+- hybrid retrieval over `document_chunks`
+- structured context loaded from `documents`
+- prompt built for Ollama
+- answer returned with sources
 
-4.2 Tender upload flow
+6.4 Matching flow
+- intent classified as `matching`
+- resolve tender scope
+- load tender requirements
+- derive better resume search query
+- resolve candidate resumes
+- load normalized/extracted resume profile
+- repair missing candidate name/role if needed
+- deterministic score
+- LangGraph reasoning summary
 
-  React TenderUpload
-      |
-      v
-  POST /tenders/upload
-      |
-      v
-  app/api/tender_routes.py
-      |
-      v
-  app/services/tender_service.py
-      |
-      v
-  app/services/document_ingestion.py
-      |
-      +--> validate_pdf_upload()
-      +--> compute_sha256_bytes()
-      +--> get_document_by_hash()
-      |      |
-      |      +--> if duplicate: reuse DB data and trigger FAISS rebuild later
-      |
-      +--> save_file_bytes() into uploads/tenders/
-      +--> create or update Document row with status="processing"
-      +--> load_pdf_pages()
-      +--> clean_pages()
-      +--> flatten_pages()
-      +--> chunk_document_pages()
-      +--> store_document_chunks() into FAISS
-      +--> replace_document_chunks() into SQL DB
-      +--> extract_tender_requirements()
-      +--> build_evidence_map()
-      +--> update Document row with status="stored"
-      |
-      v
-  return JSON payload to UI
-
-
-4.3 Resume upload flow
-
-Single resume
-  React ResumeUpload
-      |
-      v
-  POST /resumes/upload
-      |
-      v
-  app/api/resume_routes.py
-      |
-      v
-  app/services/resume_service.py -> process_uploaded_document(..., "resume")
-
-Multiple resumes
-  React ResumeUpload
-      |
-      v
-  POST /resumes/upload-multiple
-      |
-      v
-  app/api/resume_routes.py
-      |
-      v
-  app/services/resume_service.py
-      |
-      +--> loop files one by one
-      +--> call process_uploaded_document(..., "resume") for each
-      +--> split results into processed / failed
-
-
-4.4 Query flow: decision point
-
-  React AskAgent
-      |
-      v
-  POST /match/
-      |
-      v
-  app/api/match_routes.py
-      |
-      v
-  app/services/query_service.py -> answer_query()
-      |
-      +--> build active document scope from document IDs
-      +--> detect if tender/resume data exists
-      +--> classify_query_intent()
-             |
-             +--> mode = "matching" -> app/services/matching_service.py
-             |
-             +--> mode = "qa" -> retrieval + llm_text_answer()
-             |
-             +--> mode = "none" -> no data response
-
-
-4.5 QA flow
-
-  answer_query()
-      |
-      v
-  _answer_qa()
-      |
-      +--> decide scope: tender / resume / both
-      +--> _gather_scope_context()
-      |      |
-      |      +--> hybrid vector search
-      |      +--> load structured context from DB
-      |      +--> load nearby chunks / fallback chunks
-      |
-      +--> build_answer_prompt()
-      +--> llm_text_answer()
-      +--> if LLM empty: build_fallback_answer()
-      |
-      v
-  return answer_text + sources
-
-
-4.6 Matching flow
-
-  answer_query()
-      |
-      v
-  match_resumes_with_uploaded_tender()
-      |
-      +--> decide active tender and resume scope
-      +--> if no explicit tender: search tender vectors, else use active tender
-      +--> load tender chunks
-      +--> load or extract tender structured data
-      +--> build better resume search query from tender role/domain/skills/exp
-      +--> retrieve resumes
-      +--> for each candidate resume:
-      |      |
-      |      +--> load persisted chunks
-      |      +--> load or extract structured resume data
-      |      +--> repair missing candidate name / role if needed
-      |      +--> rebuild evidence if repaired
-      |      +--> score candidate deterministically
-      |      +--> build excerpt
-      |
-      +--> sort candidates by score
-      +--> invoke LangGraph reasoning graph
-      |
-      v
-  return:
-  - tender_requirements
-  - tender_evidence_map
-  - matches[]
-  - reasoning_summary
+6.5 Structured search flow
+- parse natural-language constraints
+- apply filters on normalized resume tables
+- optionally rerank with semantic pgvector search
+- return paginated results
 
 
 ===============================================================================
-5. CORE TECHNICAL BUILDING BLOCKS
+7. ACTIVE API CONTRACTS
 ===============================================================================
 
-5.1 PDF validation
-- File must have a filename.
-- File extension must end with `.pdf`.
-- File cannot be empty.
-- File size must be <= `MAX_UPLOAD_FILE_SIZE_MB` from env.
-- Content type must be in allowed PDF types.
-- File bytes must start with `%PDF`.
-- If PyMuPDF exists, the file is opened to confirm readable page count.
+| Route | Method | Purpose |
+| --- | --- | --- |
+| `/` | GET | root message |
+| `/tenders/upload` | POST | upload one tender PDF |
+| `/resumes/upload` | POST | upload one resume PDF |
+| `/resumes/upload-multiple` | POST | upload many resume PDFs |
+| `/match/` | POST | QA or matching |
+| `/search/resumes` | POST | structured + semantic resume search |
+| `/search/resumes/{document_id}` | GET | debug a stored resume profile |
+| `/documents/{document_id}/file` | GET | open original PDF inline |
+| `/system/health` | GET | database and pgvector health |
+| `/system/clear-database` | POST | clear app data |
 
 
-5.2 Deduplication
-- SHA256 is computed over raw uploaded bytes.
-- Deduplication is per `document_type` + `file_hash`.
-- If the same resume or tender is uploaded again and the old record is not
-  failed, the app does not re-parse it.
-- It updates the existing DB row, reuses stored structured data, reuses persisted
-  chunks, renames chunk metadata filename if needed, deletes current FAISS files,
-  and lets the vector index rebuild from the DB on next search.
+===============================================================================
+8. STORAGE MODEL
+===============================================================================
+
+Files on disk
+- `uploads/tenders/`
+- `uploads/resumes/`
+
+Primary database
+- PostgreSQL database `tender_rag`
+
+Core tables
+- `documents`
+- `document_chunks`
+- `resume_profiles`
+- `resume_skills`
+- `resume_experiences`
+- `resume_projects`
+- `resume_education`
+- `resume_certifications`
+- `field_evidence`
+- `resume_search_index`
+- `alembic_version`
+
+Important note
+- `vector_store/` may still exist in the repo and is still cleaned by the
+  system cleanup flow, but active retrieval is database-backed with pgvector.
 
 
-5.3 PDF extraction backend order
+===============================================================================
+9. CORE TECHNICAL BUILDING BLOCKS
+===============================================================================
 
-Primary family
-1. PyMuPDF4LLM page-chunk extraction
-2. Plain PyMuPDF extraction
+Validation
+- extension check
+- size check
+- content-type check
+- `%PDF` signature check
+- readable-page check using PyMuPDF
 
-Fallback pipeline if PyMuPDF result is not meaningful
+Deduplication
+- SHA256 over raw uploaded bytes
+- duplicate key is `document_type + file_hash`
+- duplicate uploads reuse stored structured data and persisted chunks
+
+Extraction order
+1. PyMuPDF4LLM
+2. PyMuPDF
 3. pdfplumber
 4. Docling
-5. OCR using PyMuPDF rasterization + pytesseract
+5. OCR via Tesseract
 
-Meaningful-text check
-- Requires more than a minimum character count.
-- Removes picture-placeholder noise.
-- Strips non-letter noise.
-- Requires enough meaningful tokens.
+Chunking
+- 800-word chunk size
+- 150-word overlap
+- carries section and page metadata
 
+Embeddings
+- primary model: `BAAI/bge-small-en`
+- dimension: `384`
+- fallback: deterministic hash embedding
 
-5.4 Cleaning
-- Detects repeated first lines across pages as likely headers.
-- Detects repeated last lines across pages as likely footers.
-- Removes page-number-only lines.
-- Keeps per-page structure instead of flattening immediately.
+Retrieval
+- semantic retrieval via pgvector cosine distance
+- lexical retrieval via token overlap
+- hybrid retrieval via reciprocal rank fusion
 
-
-5.5 Semantic structuring
-- Each page is scanned line by line.
-- The code looks for section markers.
-- Tender sections include:
-  eligibility, qualifications, experience, responsibilities, personnel,
-  commercial.
-- Resume sections include:
-  summary, skills, experience, projects, education, certifications.
-- If no marker is found, the block stays under `general`.
-
-Important real behavior
-- Blocks are flushed at the end of each page, so sections do not naturally span
-  across multiple pages in a single block.
-
-
-5.6 Chunking
-- Word-based chunking, not token-based chunking.
-- Default size = 800 words.
-- Overlap = 150 words.
-- Chunk metadata stores:
-  filename, chunk_id, document_id, document_type, section, page_start, page_end.
-
-
-5.7 Embeddings
-- Primary model: `BAAI/bge-small-en`
-- Dimension: 384
-- Loaded with `local_files_only=True`
-
-Fallback behavior
-- If local model is unavailable, the app uses a deterministic SHA256-based hash
-  embedding.
-- That keeps the system functional even without the transformer model.
-
-
-5.8 Vector storage
-- FAISS index type: `IndexFlatL2`
-- Separate index names:
-  `tender`
-  `resume`
-- Metadata also saved to pickle files.
-- If the FAISS files are missing, the system can rebuild them from the SQL DB
-  chunk records.
-
-
-5.9 Hybrid retrieval
-- Used mainly in QA flow.
-- Combines:
-  1. semantic vector search
-  2. lexical keyword overlap search
-- Fusion method:
-  Reciprocal Rank Fusion (RRF), `RRF_K = 60`
-
-Lexical scoring includes
-- token overlap ratio
-- direct substring bonus
-- contiguous-overlap bonus
-
-
-5.10 Structured extraction strategy
-- Tender and resume extraction both follow:
-  1. heuristic extraction first
-  2. LLM JSON extraction second
-  3. merge both results
-
-Why this is useful
-- Heuristics keep the output stable and cheap for obvious cases.
-- LLM fills in fields heuristics miss.
-- Schema validation reduces hallucinated shape errors.
-
-
-5.11 Evidence mapping
-- For every structured field, the system searches chunks for the best textual
-  support.
-- It scores each chunk by exact phrase match or token overlap.
-- Then it stores:
-  value, source_text snippet, page, section, confidence.
-
-
-5.12 Deterministic scoring
-- Required skill match: up to 70
-- Preferred skill match: up to 10
-- Role match: 10
-- Domain match: 10
-- Experience match: 10
-- Final score capped at 100
-
-Verdict rules
-- `Highly Suitable` if score >= 80 and experience matches
-- `Partially Suitable` if score >= 50
-- `Low Suitable` otherwise
+Scoring
+- required skills: 70
+- preferred skills: 10
+- role: 10
+- domain: 10
+- experience: 10
 
 
 ===============================================================================
-6. FILE-BY-FILE MAP
+10. FILE GROUPS YOU SHOULD KNOW
 ===============================================================================
 
-6.1 Root-level files
+Routes
+- `app/api/tender_routes.py`
+- `app/api/resume_routes.py`
+- `app/api/match_routes.py`
+- `app/api/search_routes.py`
+- `app/api/document_routes.py`
+- `app/api/system_routes.py`
 
-| Path | Status | Purpose | Notes |
-| --- | --- | --- | --- |
-| `AGENTS.md` | active guidance | Local instructions for coding agents | Not runtime code |
-| `README.md` | active but partially stale | Human-readable project setup and overview | Mentions Gemini, but actual provider code is Ollama-only right now |
-| `PRD.md` | reference doc | Product requirements and roadmap thinking | Not runtime code |
-| `ROADMAP.md` | reference doc | Future implementation direction | Not runtime code |
-| `requirements.txt` | active config | Python dependency list | Backend install source |
-| `.env` | local runtime config | Developer's actual environment file | Do not treat as documentation; may contain secrets |
-| `.env.example` | active config | Example environment variables | Safe reference for setup |
-| `tender_rag.db` | runtime artifact | SQLite database file | Stores documents and chunks |
-| `__init__.py` | package marker | Root package marker | No logic |
+Core services
+- `app/services/document_ingestion.py`
+- `app/services/document_repository.py`
+- `app/services/query_service.py`
+- `app/services/matching_service.py`
+- `app/services/search_service.py`
+- `app/services/evidence_service.py`
+- `app/services/system_service.py`
 
+RAG / extraction
+- `app/rag/loader.py`
+- `app/rag/cleaner.py`
+- `app/rag/semantic_structurer.py`
+- `app/rag/chunker.py`
+- `app/rag/embeddings.py`
+- `app/rag/vector_store.py`
+- `app/extraction/resume_extractor.py`
+- `app/extraction/tender_extractor.py`
 
-6.2 Backend entry and route files
+Database
+- `app/database/connection.py`
+- `app/database/vector.py`
+- `app/models/db_models.py`
+- `alembic/versions/20260319_0001_pgvector_migration.py`
 
-| Path | Status | Responsibility | Used by / calls |
-| --- | --- | --- | --- |
-| `app/main.py` | active | FastAPI app creation, CORS, router registration, startup DB init | Entry point for backend |
-| `app/__init__.py` | package marker | Empty backend package file | No logic |
-| `app/api/tender_routes.py` | active | `POST /tenders/upload` route | Calls `process_tender()` |
-| `app/api/resume_routes.py` | active | Resume upload routes | Calls `process_resume()` and `process_multiple_resumes()` |
-| `app/api/match_routes.py` | active | `POST /match/` route and request schema | Calls `answer_query()` |
-| `app/api/document_routes.py` | active | `GET /documents/{id}/file` route | Calls `get_document_file()` |
-| `app/api/system_routes.py` | active | `POST /system/clear-database` route | Calls `clear_application_data()` |
-| `app/api/__init__.py` | package marker | Empty package file | No logic |
-
-
-6.3 Service layer files
-
-| Path | Status | Responsibility | Key behavior |
-| --- | --- | --- | --- |
-| `app/services/tender_service.py` | active thin wrapper | Routes tender uploads into shared ingestion | Just forwards to `process_uploaded_document(..., "tender")` |
-| `app/services/resume_service.py` | active | Single and multiple resume upload orchestration | Loops bulk uploads, separates processed vs failed |
-| `app/services/document_ingestion.py` | critical core | Shared upload pipeline for both tender and resume | Validation, dedupe, save, extract, clean, chunk, embed, persist, structured extraction, evidence |
-| `app/services/document_repository.py` | critical core | SQLAlchemy CRUD helpers for documents and chunks | Source of truth for persistence |
-| `app/services/document_service.py` | active | Opens stored PDF back to the browser | Returns `FileResponse` inline |
-| `app/services/system_service.py` | active | Clears DB rows, upload files, vector files | Also vacuums SQLite |
-| `app/services/query_service.py` | critical core | Main query router for QA vs matching | Intent classification, scoping, hybrid retrieval, QA prompts |
-| `app/services/matching_service.py` | critical core | Tender-resume ranking logic | Structured data loading, repair, scoring, reasoning graph |
-| `app/services/evidence_service.py` | active | Converts extracted fields into page/section evidence map | Best-support chunk search |
-| `app/services/resume_name_service.py` | active support | Repairs candidate name and role for resumes | Re-opens stored PDF if chunk evidence is weak |
-| `app/services/__init__.py` | package marker | Empty package file | No logic |
-
-
-6.4 RAG files
-
-| Path | Status | Responsibility | Key behavior |
-| --- | --- | --- | --- |
-| `app/rag/loader.py` | critical core | PDF text extraction | Multi-backend, page-aware extraction |
-| `app/rag/cleaner.py` | active | Header/footer/page-number cleanup | Uses repeated boundary-line detection |
-| `app/rag/semantic_structurer.py` | active | Section detection | Tender/resume marker-based semantic blocks |
-| `app/rag/chunker.py` | active | Chunk generation | Word-based chunking with overlap and metadata |
-| `app/rag/embeddings.py` | critical core | Embedding creation | `bge-small-en` or hash fallback |
-| `app/rag/vector_store.py` | critical core | FAISS storage, metadata save, search, hybrid search | Can rebuild FAISS from DB |
-| `app/rag/tender_retriever.py` | active helper | Tender-specific wrapper around vector store | Keeps tender index name centralized |
-| `app/rag/resume_retriever.py` | active helper | Resume-specific wrapper around vector store | Keeps resume index name centralized |
-| `app/rag/retriever.py` | minimal / legacy | Re-exports `search_resume_vectors` only | Not central to current flow |
-| `app/rag/__init__.py` | package marker | Empty package file | No logic |
-
-
-6.5 Extraction files
-
-| Path | Status | Responsibility | Key behavior |
-| --- | --- | --- | --- |
-| `app/extraction/tender_extractor.py` | critical core | Tender structured extraction | Heuristics + LLM merge |
-| `app/extraction/resume_extractor.py` | critical core | Resume structured extraction | Strong heuristics for name, role, experience, projects |
-| `app/extraction/__init__.py` | package marker | Empty package file | No logic |
-
-
-6.6 LLM files
-
-| Path | Status | Responsibility | Key behavior |
-| --- | --- | --- | --- |
-| `app/llm/provider.py` | critical core | LLM transport layer | Ollama JSON/text calls with fallback handling |
-| `app/llm/tender_llm_extractor.py` | active | Tender JSON extraction prompt wrapper | Uses `TenderRequirements` schema |
-| `app/llm/resume_llm_extractor.py` | active | Resume JSON extraction prompt wrapper | Uses `ResumeProfile` schema |
-| `app/llm/schemas.py` | active | Pydantic schema definitions | Tender, resume, evidence records |
-| `app/llm/extractor.py` | empty placeholder | No runtime role | Safe to call placeholder |
-| `app/llm/__init__.py` | package marker | Empty package file | No logic |
-
-
-6.7 Agent and graph files
-
-| Path | Status | Responsibility | Key behavior |
-| --- | --- | --- | --- |
-| `app/agents/query_agent.py` | active support | Query intent detection and QA prompt building | Not an autonomous agent despite the name |
-| `app/agents/reasoning_agent.py` | active support | Deterministic explanation generation | Adds reasoning strings and shortlist summary |
-| `app/agents/resume_agent.py` | empty placeholder | No runtime role | Unused |
-| `app/agents/scoring_agent.py` | empty placeholder | No runtime role | Unused |
-| `app/agents/tender_agent.py` | empty placeholder | No runtime role | Unused |
-| `app/graph/matching_graph.py` | active but small | LangGraph wrapper | Single-node graph around `reasoning_agent` |
-
-
-6.8 Database, model, and utility files
-
-| Path | Status | Responsibility | Key behavior |
-| --- | --- | --- | --- |
-| `app/database/connection.py` | critical core | SQLAlchemy engine, sessions, init, SQLite vacuum | Reads `DATABASE_URL` |
-| `app/database/__init__.py` | package marker | Empty package file | No logic |
-| `app/models/db_models.py` | critical core | SQLAlchemy table definitions | `Document` and `DocumentChunk` |
-| `app/models/document_pages.py` | active | Pydantic page extraction models | `PageText`, `ExtractedDocument` |
-| `app/models/vector_metadata.py` | active | Pydantic metadata model for FAISS chunks | Keeps metadata shape consistent |
-| `app/models/__init__.py` | package marker | Empty package file | No logic |
-| `app/utils/file_hash.py` | active | SHA256 helper | Used for dedupe |
-| `app/utils/file_storage.py` | active | Local file naming and saving | Timestamp-prefixed filenames |
-| `app/utils/file_validator.py` | critical support | Upload validation | PDF, size, content type, corruption checks |
-| `app/utils/__init__.py` | package marker | Empty package file | No logic |
-
-
-6.9 Frontend files
-
-| Path | Status | Responsibility | Key behavior |
-| --- | --- | --- | --- |
-| `tender-ui/src/main.jsx` | active | React bootstrap | Mounts `<App />` |
-| `tender-ui/src/App.jsx` | critical UI shell | Main page state and layout | Tracks active document IDs and latest result |
-| `tender-ui/src/api/api.js` | active helper | Axios instance and API helpers | Only `getDocumentFileUrl()` is clearly used; some helpers are stale |
-| `tender-ui/src/components/TenderUpload.jsx` | active | Tender upload widget | Sends `multipart/form-data` to backend |
-| `tender-ui/src/components/ResumeUpload.jsx` | active | Resume upload widget | Supports single and multiple upload |
-| `tender-ui/src/components/AskAgent.jsx` | critical UI flow | Query/match widget | Sends `/match/` requests and renders answer/matches |
-| `tender-ui/src/components/InsightsPanel.jsx` | active | Data workspace panel | Displays extracted JSON and ranked profiles |
-| `tender-ui/src/index.css` | active | Tailwind import entry | `@import "tailwindcss";` |
-| `tender-ui/src/App.css` | stale / unused | Old Vite sample CSS | Not imported by current React tree |
-| `tender-ui/src/assets/react.svg` | unused asset | Default Vite asset | Not part of app logic |
-| `tender-ui/public/vite.svg` | support asset | Used as browser favicon in `index.html` | Not app logic |
-| `tender-ui/index.html` | active shell | Vite HTML entry | Loads `src/main.jsx` |
-| `tender-ui/vite.config.js` | active config | Vite + React + Tailwind plugin config | Frontend build config |
-| `tender-ui/eslint.config.js` | active config | ESLint rules for frontend | Developer tooling, not runtime |
-| `tender-ui/package.json` | active config | Frontend scripts and dependencies | React 19, Vite 7, Tailwind 4 |
-| `tender-ui/package-lock.json` | generated lockfile | Exact npm dependency versions | Not handwritten logic |
-| `tender-ui/README.md` | stale template doc | Default Vite README | Not project-specific |
-
-
-6.10 Runtime and generated folders
-
-| Path | Status | Purpose | Notes |
-| --- | --- | --- | --- |
-| `uploads/tenders/` | runtime | Saved tender PDFs | Local artifacts |
-| `uploads/resumes/` | runtime | Saved resume PDFs | Local artifacts |
-| `vector_store/` | runtime | FAISS and metadata files | Rebuilt from DB if invalidated |
-| `tender-ui/dist/` | generated | Frontend build output | Not source |
-| `tender-ui/node_modules/` | generated | Installed frontend packages | Not source |
+Frontend
+- `tender-ui/src/App.jsx`
+- `tender-ui/src/components/ResumeUpload.jsx`
+- `tender-ui/src/components/TenderUpload.jsx`
+- `tender-ui/src/components/AskAgent.jsx`
+- `tender-ui/src/components/InsightsPanel.jsx`
 
 
 ===============================================================================
-7. DETAILED BEHAVIOR OF THE MOST IMPORTANT FILES
+11. IMPORTANT CURRENT TRUTHS
 ===============================================================================
 
-7.1 `app/services/document_ingestion.py`
-
-Why it matters
-- This is the upload backbone of the whole system.
-
-What it does in order
-1. Validates `document_type` is either `tender` or `resume`.
-2. Reads uploaded file bytes from FastAPI `UploadFile`.
-3. Validates PDF structure.
-4. Computes SHA256 hash.
-5. Checks duplicate document for same type.
-6. If duplicate and existing record is usable:
-   - updates existing record status
-   - fetches persisted chunks
-   - renames stored chunk metadata filename
-   - invalidates FAISS so it can rebuild with updated metadata
-   - returns existing structured data/evidence without reprocessing
-7. If not duplicate:
-   - chooses upload directory by document type
-   - saves file with timestamp-prefixed sanitized filename
-   - creates `Document` row with status `processing`
-8. Extracts page-aware text from the PDF.
-9. Cleans pages.
-10. Flattens pages to full text.
-11. Rejects file if no readable text remains.
-12. Builds chunk records with page and section metadata.
-13. Stores chunk embeddings in FAISS.
-14. Replaces persisted chunk rows in SQL DB.
-15. Runs structured extraction:
-   - tender -> `extract_tender_requirements`
-   - resume -> `extract_resume_data`
-16. Builds evidence map from structured data and chunks.
-17. Updates `Document` row with:
-   - status = `stored`
-   - extraction backend
-   - page count
-   - structured_data
-   - evidence_map
-18. Returns a UI-friendly payload.
-
-
-7.2 `app/services/query_service.py`
-
-Why it matters
-- `/match/` always enters here first.
-- This file is the traffic controller between QA and matching.
-
-Important concepts
-- Active scope:
-  If the UI sends `tender_document_id`, `resume_document_ids`, or
-  `restrict_to_active_uploads=true`, the backend tries to answer only from those
-  uploaded files.
-- Latest-document fallback:
-  If no active IDs are provided, it falls back to the latest stored tender or
-  resume where appropriate.
-
-How it decides mode
-- Calls `classify_query_intent()`.
-- Matching mode only happens when:
-  1. tender data exists
-  2. resume data exists
-  3. query contains matching-style keywords
-- Otherwise it falls into QA mode with scope tender/resume/both.
-
-How QA works
-- Search results are gathered with hybrid retrieval.
-- It mixes structured context from DB with retrieved chunk text.
-- It builds a strict prompt telling the LLM to answer only from provided context.
-- If LLM fails, it returns a fallback answer built from chunk snippets.
-
-
-7.3 `app/services/matching_service.py`
-
-Why it matters
-- This is the heart of ranking and shortlisting.
-
-Matching steps
-1. Resolve tender scope from explicit document ID or vector search.
-2. Load tender chunks from DB first, FAISS metadata second.
-3. Load existing tender structured data from DB or extract it fresh.
-4. Build a better resume search query from tender role/domain/skills/exp.
-5. Retrieve resumes:
-   - if active resume IDs were provided, use those documents directly
-   - else vector search top resumes
-6. For each resume:
-   - load persisted chunks
-   - load or extract structured profile
-   - repair missing candidate name / role if needed
-   - compute deterministic score
-   - build excerpt
-7. Sort by score and experience match.
-8. Run LangGraph reasoning for explanations and summary.
-
-Scoring logic details
-- Skill matching uses phrase normalization and overlap, not only exact equality.
-- Experience is integer-only when scoring.
-- Role/domain matching are text comparisons with normalized token overlap.
-
-
-7.4 `app/extraction/resume_extractor.py`
-
-Why it matters
-- This is the most heuristic-heavy file in the repo.
-
-What it extracts
-- candidate_name
-- role
-- domain
-- skills
-- experience
-- qualifications
-- projects
-
-How name extraction works
-- Looks near labels like:
-  `Name of Staff`, `Name of Candidate`, `Candidate Name`
-- Tries inline label extraction.
-- Tries extraction between labels.
-- Scores nearby lines based on:
-  - label proximity
-  - whether address follows
-  - whether date appears before
-  - whether line appears near top of file
-- Sanitizes against a large noise-token list.
-
-How role extraction works
-- Looks for labels like:
-  `Proposed Position`, `Position`, `Role`, `Profession`
-- If not found, tries summary patterns like:
-  `X with 10 years of experience`
-- If still not found, inspects top header lines for likely job-title words.
-
-How experience extraction works
-- Direct regex for `X years of experience`
-- Label-based extraction such as `Years with Firm/Entity`
-- If needed, computes years by parsing date ranges across resume text
-
-How projects extraction works
-- Uses long regex patterns for common infrastructure project wording
-- Filters obvious noise snippets
-- Deduplicates similar project strings
-
-Merge strategy
-- Heuristic values are preferred.
-- LLM values fill gaps.
-
-
-7.5 `app/extraction/tender_extractor.py`
-
-What it extracts
-- role
-- domain
-- skills_required
-- preferred_skills
-- experience_required
-- qualifications
-- responsibilities
-
-How it works
-- Uses domain keywords like highway, bridge, civil, python, machine learning.
-- Uses tender-title heuristics to infer role.
-- Uses skill patterns to infer required skills.
-- Uses personnel-related experience patterns to detect years.
-- Uses preferred markers like `preferred`, `preferably`, `desirable`.
-- Uses coarse qualification and responsibility detection from tender terms.
-
-Important actual behavior
-- In the final merge, `preferred_skills` and `experience_required` come only from
-  heuristics. The code does not currently fall back to LLM values for those two
-  fields if heuristics miss them.
-
-
-7.6 `app/llm/provider.py`
-
-What it does
-- Loads env vars.
-- Builds Ollama `/api/chat` URL.
-- Chooses model per task:
-  extraction, reasoning, or default.
-- Sends either:
-  - schema-guided JSON extraction request, or
-  - plain text answer request.
-
-Fallback behavior
-- For JSON extraction, if Ollama is unavailable, returns a schema-shaped default
-  JSON object instead of failing hard.
-- For text answering, if Ollama is unavailable, returns an empty string and lets
-  caller build a fallback answer.
-
-Important actual behavior
-- The env has `LLM_PROVIDER`, but current provider code effectively supports only
-  Ollama right now.
-- README and PRD mention Gemini, but there is no active Gemini transport code in
-  `app/llm/provider.py`.
-
-
-7.7 `app/rag/vector_store.py`
-
-What it does
-- Embeds text.
-- Saves FAISS indexes.
-- Saves metadata pickles.
-- Loads indexes lazily.
-- Rebuilds missing FAISS files from SQL DB chunk records.
-- Supports semantic search and hybrid semantic+lexical search.
-- Fetches all chunks for a given document or a local window around a chunk ID.
-
-Important design point
-- SQL DB is close to the source of truth for chunk metadata.
-- FAISS is the fast retrieval layer and can be regenerated.
+1. PostgreSQL + pgvector is active now.
+2. Ollama is the active provider path.
+3. LangGraph is real but intentionally small.
+4. The system is page-aware.
+5. Normalized resume storage is implemented.
 
 
 ===============================================================================
-8. FRONTEND WALKTHROUGH
+12. WHAT IS STALE OR LOW-SIGNAL
 ===============================================================================
 
-8.1 `tender-ui/src/App.jsx`
-
-State tracked in the top component
-- `activeResumeDocumentIds`
-- `activeTenderDocumentId`
-- `resumeUploads`
-- `tenderUpload`
-- `latestMatchResult`
-- `activeWorkspaceTab`
-- `uiResetKey`
-- `systemMessage`
-- `systemMessageIsError`
-- `clearingDatabase`
-
-Why this matters
-- These document IDs are sent back to the backend, so the backend can restrict
-  matching and QA to the current uploaded documents.
-
-
-8.2 `TenderUpload.jsx`
-- Lets user select one PDF.
-- Sends `multipart/form-data` to `/tenders/upload`.
-- Stores returned payload locally.
-- Passes `document_id` and upload record back to `App`.
-
-
-8.3 `ResumeUpload.jsx`
-- Lets user select one or many PDFs.
-- Prevents duplicate selection in the browser by `name-size` pair.
-- Uses `/resumes/upload` for one file.
-- Uses `/resumes/upload-multiple` for many files.
-- Collects returned `document_id`s and upload records for UI state.
-
-
-8.4 `AskAgent.jsx`
-- Sends every prompt to `/match/`.
-- Always includes current `tender_document_id`, `resume_document_ids`, and
-  `restrict_to_active_uploads: true`.
-- So current UI behavior is session-scoped by design.
-
-Special UI behavior
-- If the user asked a QA-style question and active tender/resumes exist,
-  `AskAgent` may fire a second background request:
-  `shortlist top matching profiles for the uploaded tender`
-- That ensures the profiles tab still gets ranked candidates even when the first
-  answer was QA, not matching.
-
-
-8.5 `InsightsPanel.jsx`
-- Resume tab:
-  pretty-prints extracted resume JSON and evidence map
-- Tender tab:
-  pretty-prints extracted tender JSON and evidence map
-- Profiles tab:
-  shows sorted ranked profiles and opens original PDFs on click
-
-Important actual behavior
-- Profiles are sorted again on the client by score, experience match, then name.
-
-
-===============================================================================
-9. API CONTRACTS
-===============================================================================
-
-| Route | Method | Request | Response purpose |
-| --- | --- | --- | --- |
-| `/` | GET | none | Health-style root message |
-| `/tenders/upload` | POST | multipart `file` | Upload and process one tender PDF |
-| `/resumes/upload` | POST | multipart `file` | Upload and process one resume PDF |
-| `/resumes/upload-multiple` | POST | multipart `files[]` | Upload and process many resumes |
-| `/match/` | POST | JSON `{query, tender_document_id?, resume_document_ids?, restrict_to_active_uploads}` | QA answer or ranking result |
-| `/documents/{document_id}/file` | GET | path id | Open stored PDF inline |
-| `/system/clear-database` | POST | none | Clear DB rows, uploads, vectors |
-
-
-`/match/` request shape
-
-{
-  "query": "shortlist the best resumes",
-  "tender_document_id": 12,
-  "resume_document_ids": [21, 22, 23],
-  "restrict_to_active_uploads": true
-}
-
-
-`/match/` can return QA-style payload inside `matches`
-- `mode`
-- `query_scope`
-- `message`
-- `answer_text`
-- `sources`
-- `matches`
-- `reasoning_summary`
-
-or matching-style payload inside `matches`
-- `message`
-- `tender_requirements`
-- `tender_evidence_map`
-- `matches`
-- `reasoning_summary`
-- plus `mode = matching` injected by `query_service`
-
-
-===============================================================================
-10. SCHEMAS YOU SHOULD KNOW
-===============================================================================
-
-Tender schema
-- role: string | null
-- domain: string | null
-- skills_required: list[str]
-- preferred_skills: list[str]
-- experience_required: int | null
-- qualifications: list[str]
-- responsibilities: list[str]
-
-
-Resume schema
-- candidate_name: string | null
-- role: string | null
-- domain: string | null
-- skills: list[str]
-- experience_years: int | null   (LLM schema)
-
-Important actual merge behavior
-- After merge in `resume_extractor.py`, the final response field becomes
-  `experience`, not `experience_years`.
-
-
-Evidence schema
-- value
-- source_text
-- page
-- section
-- confidence
-
-
-===============================================================================
-11. ACTUAL CURRENT BEHAVIOR VS STALE OR MISLEADING PARTS
-===============================================================================
-
-These are important for interviews because they show you understand the code,
-not only the docs.
-
-1. Gemini is mentioned in docs, but active provider code is Ollama-only.
-- Docs mention Gemini support.
-- `app/llm/provider.py` currently implements Ollama requests and fallback only.
-
-2. The system is no longer only "FAISS local, no persistence".
-- Chunks and documents are also persisted in SQLite with SQLAlchemy.
-- FAISS can rebuild from DB rows.
-
-3. Deduplication already exists.
-- Some older notes say SHA256 dedupe is a future improvement.
-- Current upload code already computes SHA256 and reuses existing parsed data.
-
-4. Extraction is page-aware now.
-- Older notes say page evidence is not persisted yet.
-- Current code extracts pages, stores `page_start/page_end`, and builds evidence
-  objects with page and section.
-
-5. LangGraph use is real but minimal.
-- This is not a multi-step agentic graph.
-- It is a single-node graph that wraps `reasoning_agent`.
-
-6. `tender-ui/src/api/api.js` contains stale helper code.
-- `matchResumes()` posts `{ tender_text: ... }`, but backend expects `query`.
-- Components do not use that helper anyway.
-
-7. `tender-ui/src/App.css` is stale.
-- It is not imported by the current app entry.
-
-8. `tender-ui/README.md` is default Vite text.
-- It is not specific to this project.
-
-9. Several "agent" files are empty placeholders.
+Placeholder or minimally used files
 - `app/agents/resume_agent.py`
 - `app/agents/scoring_agent.py`
 - `app/agents/tender_agent.py`
+- `app/llm/extractor.py`
 
-10. `app/llm/extractor.py` is also empty.
-- It has no active role in the runtime pipeline.
+Low-signal frontend files
+- `tender-ui/src/App.css`
+- `tender-ui/README.md`
 
-
-===============================================================================
-12. INTERVIEW QUESTIONS AND GOOD ANSWERS
-===============================================================================
-
-Q1. Why did you use RAG here?
-A.
-- Tender and resume PDFs are long, semi-structured documents.
-- I needed retrieval so the system could focus on the most relevant parts of the
-  uploaded documents instead of sending whole files to the model every time.
-- RAG also lets me reuse document chunks across many future queries.
-
-
-Q2. Why not rely only on the LLM for extraction?
-A.
-- PDF text is noisy and tender/resume formats vary a lot.
-- Heuristics give stable low-cost extraction for obvious patterns like names,
-  dates, skills, and experience labels.
-- The LLM is used as a second pass to fill gaps and keep output schema-shaped.
-
-
-Q3. Why do you store both FAISS and SQL data?
-A.
-- FAISS gives fast vector similarity search.
-- SQLAlchemy/SQLite gives durable metadata and structured outputs.
-- The combination lets the app rebuild FAISS if vector files are deleted and also
-  makes document inspection and evidence persistence easier.
-
-
-Q4. How does duplicate upload handling work?
-A.
-- On upload, I hash raw bytes with SHA256.
-- For the same document type, if that hash already exists and the prior record is
-  not failed, I reuse stored chunks, structured data, and evidence instead of
-  parsing the file again.
-
-
-Q5. How do you extract text from difficult PDFs?
-A.
-- I use a fallback chain:
-  PyMuPDF4LLM -> PyMuPDF -> pdfplumber -> Docling -> OCR with Tesseract.
-- That improves robustness for digitally generated PDFs and scanned documents.
-
-
-Q6. How is resume ranking calculated?
-A.
-- It is deterministic, not LLM-scored.
-- Required skill coverage contributes up to 70 points.
-- Preferred skill coverage contributes up to 10.
-- Role match adds 10.
-- Domain match adds 10.
-- Experience match adds 10.
-- Final score is capped at 100 and then mapped to a verdict.
-
-
-Q7. What does LangGraph do in this project?
-A.
-- Right now it is a lightweight reasoning wrapper.
-- After deterministic scoring, a single-node LangGraph step adds candidate
-  explanations and a summary such as top candidate and shortlist.
-
-
-Q8. How do you avoid answering from the wrong document?
-A.
-- The frontend sends active document IDs with every query.
-- The backend can restrict retrieval and reasoning to only those active uploads.
-- If no explicit active scope is given, it falls back to the latest stored docs.
-
-
-Q9. What are the biggest limitations of the current version?
-A.
-- LLM provider is effectively Ollama-only right now.
-- Some extraction logic is still heuristic-heavy and format-sensitive.
-- Semantic sections are page-local.
-- Matching uses simple deterministic scoring instead of deeper competency models.
-- There are some stale files and placeholder modules in the repo.
-
-
-Q10. If you had more time, what would you improve first?
-A.
-- Add tests around extraction and scoring.
-- Improve section detection across page boundaries.
-- Add better normalization for skill taxonomies.
-- Support PostgreSQL/PGVector for larger scale.
-- Add stronger provenance and page-level evidence in the UI.
+Legacy cleanup artifact
+- `vector_store/` directory cleanup remains in system cleanup code
 
 
 ===============================================================================
-13. LIKELY WEAK SPOTS AN INTERVIEWER MAY NOTICE
+13. GOOD INTERVIEW ANSWERS
 ===============================================================================
 
-Be ready to answer these honestly.
+Q. Why did you use RAG here?
+A.
+- Tender and resume PDFs are long, noisy, and semi-structured.
+- Retrieval lets the system use only relevant chunks instead of sending entire
+  files to the model every time.
 
-1. Why is `LLM_PROVIDER` present if Gemini is not implemented?
-- Good answer: the docs and env shape were prepared for multi-provider support,
-  but the current active transport layer is Ollama-only. I would either finish
-  the abstraction or remove stale configuration to reduce confusion.
+Q. Why not let the LLM do everything?
+A.
+- Heuristics are faster, cheaper, and more stable for fields like names,
+  experience, skills, and role labels.
+- The LLM is used as a second pass for schema-shaped extraction and reasoning.
 
-2. Why does matching use semantic search, while QA uses hybrid search?
-- Good answer: QA benefits more from lexical grounding for precise answers.
-  Matching currently leans on resume search driven by extracted tender fields.
-  A reasonable next step is to test hybrid retrieval for matching too.
+Q. Why PostgreSQL + pgvector?
+A.
+- It keeps structured relational data and vector search in one primary backend.
+- I can store document metadata, normalized resume profiles, and embeddings in a
+  single database instead of splitting source-of-truth across local files.
 
-3. Why is LangGraph minimal?
-- Good answer: I kept reasoning deterministic and lightweight first. The graph is
-  currently a wrapper to keep future extension easy without overcomplicating the
-  MVP.
+Q. How do you handle duplicate uploads?
+A.
+- I hash the uploaded bytes with SHA256.
+- For the same document type, if the hash already exists and the previous record
+  is usable, I reuse the stored parse result instead of reprocessing the file.
 
-4. Why use SQLite if roadmap mentions PostgreSQL?
-- Good answer: SQLite keeps MVP setup simple. The data model already uses
-  SQLAlchemy, so moving to PostgreSQL later is easier.
+Q. How do you rank resumes?
+A.
+- Ranking is deterministic, not LLM-scored.
+- Required skills contribute most of the score, then preferred skills, role,
+  domain, and experience.
 
-5. Why are some files empty?
-- Good answer: they are placeholders from earlier or planned architecture. The
-  active runtime path is concentrated in services, RAG, extraction, and UI
-  components.
+Q. What does LangGraph do here?
+A.
+- It adds human-readable explanations and a shortlist summary after the
+  deterministic scoring step.
 
 
 ===============================================================================
 14. MEMORY CHEAT SHEET
 ===============================================================================
 
-If you forget the flow in interview, say it in this order:
-
 1. Upload
-- FastAPI upload route
 - validate PDF
 - SHA256 dedupe
-- save file locally
+- save file
 
 2. Preprocess
-- extract page text with fallback PDF parsers
-- clean pages
-- semantic sectioning
-- chunking with page metadata
+- extract page text
+- clean
+- semantic sections
+- chunk
 
 3. Store
-- embedding generation
-- FAISS vector storage
-- SQL document/chunk persistence
+- embed
+- PostgreSQL + pgvector
+- normalized resume tables
 
 4. Structure
 - heuristic extraction
 - Ollama JSON extraction
-- merge final structured fields
-- build evidence map
+- evidence mapping
 
 5. Query
-- classify intent into QA or matching
-- retrieve relevant chunks
-- either answer question or score resumes
+- classify intent
+- QA / matching / search
 
-6. Score
-- required skills
-- preferred skills
-- role/domain
-- experience
-- verdict
-
-7. Explain
+6. Match
+- retrieve candidates
+- deterministic score
 - reasoning summary
-- UI shows JSON, evidence, and ranked profiles
 
 
 ===============================================================================
-15. SIMPLE "TALK TRACK" FOR EACH MAJOR FILE GROUP
+15. FINAL TRUTH
 ===============================================================================
 
-Routes
-- Thin layer. Only receives HTTP requests and forwards them to services.
-
-Services
-- Real orchestration layer. Upload, query, matching, system cleanup, file serve.
-
-RAG
-- Extraction, cleanup, semantic blocks, chunking, embeddings, vector search.
-
-Extraction
-- Convert raw document text into structured tender/resume fields.
-
-LLM
-- Schema-based JSON extraction and context-grounded QA answering through Ollama.
-
-DB/models
-- Persist document registry and chunk metadata.
-
-Frontend
-- Upload files, ask questions, inspect structured JSON, open stored PDFs, view
-  ranked profiles.
-
-
-===============================================================================
-16. FINAL TRUTH YOU SHOULD REMEMBER
-===============================================================================
-
-If an interviewer asks, "What is the actual current architecture?", the most
-accurate answer from the code today is:
+If an interviewer asks, "What is the current architecture?", the accurate answer
+is:
 
 - FastAPI backend + React frontend
-- SQLite via SQLAlchemy for document/chunk persistence
-- Local FAISS for vector search
-- Page-aware PDF extraction with multiple fallbacks
-- Heuristic + Ollama structured extraction
-- Hybrid retrieval for QA
-- Deterministic scoring for resume ranking
-- Minimal LangGraph reasoning layer
-- Local file storage under `uploads/`
-
-That answer matches the real code better than some older docs in the repo.
+- PostgreSQL via SQLAlchemy for relational persistence
+- pgvector for vector similarity search
+- page-aware PDF extraction with multiple fallbacks
+- heuristic + Ollama structured extraction
+- hybrid retrieval for QA
+- deterministic scoring for ranking
+- normalized resume tables for structured search
+- lightweight LangGraph reasoning summary
+- file storage under `uploads/`

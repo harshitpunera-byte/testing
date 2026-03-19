@@ -1,11 +1,12 @@
 import hashlib
+import os
 from typing import Iterable, List
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
 MODEL_NAME = "BAAI/bge-small-en"
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
 
 _model = None
 _model_failed = False
@@ -51,7 +52,12 @@ def create_embedding(text: str) -> np.ndarray:
         return _hash_embedding(text)
 
     vector = model.encode(text)
-    return np.asarray(vector, dtype="float32")
+    vector = np.asarray(vector, dtype="float32")
+    if vector.shape[0] != EMBEDDING_DIM:
+        raise ValueError(
+            f"Embedding dimension mismatch for {MODEL_NAME}: expected {EMBEDDING_DIM}, got {vector.shape[0]}"
+        )
+    return vector
 
 
 def create_embeddings(texts: Iterable[str]) -> np.ndarray:
@@ -66,4 +72,9 @@ def create_embeddings(texts: Iterable[str]) -> np.ndarray:
         return np.asarray(vectors, dtype="float32")
 
     vectors = model.encode(text_list)
-    return np.asarray(vectors, dtype="float32")
+    vectors = np.asarray(vectors, dtype="float32")
+    if vectors.shape[1] != EMBEDDING_DIM:
+        raise ValueError(
+            f"Embedding dimension mismatch for {MODEL_NAME}: expected {EMBEDDING_DIM}, got {vectors.shape[1]}"
+        )
+    return vectors

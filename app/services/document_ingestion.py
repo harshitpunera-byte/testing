@@ -4,17 +4,22 @@ from app.extraction.resume_extractor import extract_resume_data
 from app.extraction.tender_extractor import extract_tender_requirements
 from app.rag.chunker import chunk_document_pages
 from app.rag.cleaner import clean_pages
+from app.rag.embeddings import create_embeddings
 from app.rag.loader import flatten_pages, load_pdf_pages
 from app.rag.vector_store import invalidate_index, store_document_chunks
 from app.services.document_repository import (
     create_document_record,
     get_document_by_hash,
     get_persisted_document_chunks,
+    get_resume_profile_with_relations,
+    purge_document_artifacts,
     rename_document_chunks,
     replace_document_chunks,
     update_document_record,
 )
 from app.services.evidence_service import build_evidence_map
+from app.services.evidence_service import persist_evidence_map
+from app.services.profile_normalizer import normalize_resume_profile
 from app.utils.file_hash import compute_sha256_bytes
 from app.utils.file_storage import build_storage_name, save_file_bytes
 from app.utils.file_validator import validate_pdf_upload
@@ -49,6 +54,7 @@ def _build_error_response(filename: str, message: str, status: str) -> dict:
         "chunks": 0,
         "stored_chunks": 0,
         "document_id": None,
+        "normalization": None,
     }
 
 
@@ -94,6 +100,11 @@ async def process_uploaded_document(file, document_type: str) -> dict:
             "evidence_map": updated_existing.get("evidence_map", {}),
             "pages": updated_existing.get("total_pages"),
             "extraction_backend": updated_existing.get("extraction_backend"),
+            "normalization": (
+                get_resume_profile_with_relations(updated_existing.get("id"))
+                if document_type == "resume" and updated_existing.get("id") is not None
+                else None
+            ),
         }
 
     upload_dir = UPLOAD_DIRS[document_type]
@@ -123,6 +134,7 @@ async def process_uploaded_document(file, document_type: str) -> dict:
                 stored_path=saved_path,
                 file_hash=file_hash,
                 file_size=len(file_bytes),
+                mime_type=getattr(file, "content_type", None),
                 status="processing",
                 structured_data={},
                 evidence_map={},
@@ -138,6 +150,8 @@ async def process_uploaded_document(file, document_type: str) -> dict:
                 status="failed",
                 extraction_backend=extracted.backend,
                 total_pages=len(cleaned_pages),
+                raw_text="",
+                markdown_text="",
             )
             return _build_error_response(original_filename, "No readable text found in PDF", status="invalid")
 
@@ -157,11 +171,19 @@ async def process_uploaded_document(file, document_type: str) -> dict:
                 status="failed",
                 extraction_backend=extracted.backend,
                 total_pages=len(cleaned_pages),
+                raw_text=full_text,
+                markdown_text=full_text,
             )
             return _build_error_response(original_filename, "No chunks created from extracted text", status="failed")
 
+        embeddings = create_embeddings([chunk["text"] for chunk in chunk_records]).tolist()
         stored_count = store_document_chunks(INDEX_NAMES[document_type], chunk_records, filename=original_filename)
-        replace_document_chunks(document_record["id"], INDEX_NAMES[document_type], chunk_records)
+        replace_document_chunks(
+            document_record["id"],
+            INDEX_NAMES[document_type],
+            chunk_records,
+            embeddings=embeddings,
+        )
         invalidate_index(INDEX_NAMES[document_type])
 
         extractor = STRUCTURED_EXTRACTORS[document_type]
@@ -173,9 +195,37 @@ async def process_uploaded_document(file, document_type: str) -> dict:
             status="stored",
             extraction_backend=extracted.backend,
             total_pages=len(cleaned_pages),
+            raw_text=full_text,
+            markdown_text=full_text,
             structured_data=structured_data,
             evidence_map=evidence_map,
+            metadata_json={
+                "total_pages": len(cleaned_pages),
+                "chunk_count": len(chunk_records),
+            },
         )
+        normalization_result = None
+        if document_type == "resume":
+            normalization_result = normalize_resume_profile(
+                updated_document["id"] if updated_document else document_record["id"],
+                structured_data,
+                full_text,
+                evidence_map,
+            )
+            persist_evidence_map(
+                updated_document["id"] if updated_document else document_record["id"],
+                evidence_map,
+                resume_profile_id=(normalization_result or {}).get("profile", {}).get("id"),
+                entity_type="resume_profile",
+                entity_id=(normalization_result or {}).get("profile", {}).get("id"),
+            )
+        else:
+            persist_evidence_map(
+                updated_document["id"] if updated_document else document_record["id"],
+                evidence_map,
+                entity_type="tender_requirements",
+                entity_id=updated_document["id"] if updated_document else document_record["id"],
+            )
 
         return {
             "filename": original_filename,
@@ -190,8 +240,10 @@ async def process_uploaded_document(file, document_type: str) -> dict:
             "extraction_backend": extracted.backend,
             "structured_data": structured_data,
             "evidence_map": evidence_map,
+            "normalization": normalization_result,
         }
     except Exception as exc:
         if document_record:
+            purge_document_artifacts(document_record["id"])
             update_document_record(document_record["id"], status="failed")
         return _build_error_response(original_filename, f"Processing failed: {exc}", status="failed")

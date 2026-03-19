@@ -50,7 +50,9 @@ def chunk_blocks(
                     "section": block.get("section", "general"),
                     "page_start": block.get("page_start"),
                     "page_end": block.get("page_end"),
-                    "embedding_backend": "faiss",
+                    "embedding_backend": "pgvector",
+                    "chunk_type": "semantic",
+                    "token_count": len(chunk_text.split()),
                 }
             )
             next_chunk_id += 1

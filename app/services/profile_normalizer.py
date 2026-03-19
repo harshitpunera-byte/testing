@@ -1,0 +1,294 @@
+from __future__ import annotations
+
+import re
+from datetime import date, datetime
+
+from app.rag.embeddings import create_embedding
+from app.services.document_repository import (
+    replace_resume_certifications,
+    replace_resume_education,
+    replace_resume_experiences,
+    replace_resume_projects,
+    replace_resume_skills,
+    upsert_resume_profile,
+    upsert_resume_search_index,
+)
+
+
+EMAIL_PATTERN = re.compile(r"([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})", re.IGNORECASE)
+PHONE_PATTERN = re.compile(r"(\+?\d[\d\s()-]{8,}\d)")
+NOTICE_PATTERN = re.compile(r"notice\s+period\s*[:\-]?\s*(\d{1,3})\s*(?:days?|day)", re.IGNORECASE)
+CTC_PATTERN = re.compile(r"(current|expected)\s+ctc\s*[:\-]?\s*([\d.]+)", re.IGNORECASE)
+LOCATION_PATTERN = re.compile(r"(?:location|address|city)\s*[:\-]?\s*([A-Za-z][A-Za-z\s,.-]{2,80})", re.IGNORECASE)
+
+
+def _clean_text(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = re.sub(r"\s+", " ", str(value)).strip(" ,:-")
+    return cleaned or None
+
+
+def _normalize_title(value: str | None) -> str | None:
+    value = _clean_text(value)
+    return value.lower() if value else None
+
+
+def _extract_email(text: str) -> str | None:
+    match = EMAIL_PATTERN.search(text or "")
+    return match.group(1) if match else None
+
+
+def _extract_phone(text: str) -> str | None:
+    match = PHONE_PATTERN.search(text or "")
+    return _clean_text(match.group(1)) if match else None
+
+
+def _extract_notice_period_days(text: str) -> int | None:
+    match = NOTICE_PATTERN.search(text or "")
+    return int(match.group(1)) if match else None
+
+
+def _extract_ctc(text: str, label: str) -> float | None:
+    for found_label, amount in CTC_PATTERN.findall(text or ""):
+        if found_label.lower() == label.lower():
+            try:
+                return float(amount)
+            except ValueError:
+                return None
+    return None
+
+
+def _extract_location(text: str) -> tuple[str | None, str | None, str | None]:
+    match = LOCATION_PATTERN.search(text or "")
+    if not match:
+        return None, None, None
+    parts = [part.strip() for part in match.group(1).split(",") if part.strip()]
+    if not parts:
+        return None, None, None
+    if len(parts) == 1:
+        return parts[0], None, None
+    if len(parts) == 2:
+        return parts[0], parts[1], None
+    return parts[0], parts[1], parts[2]
+
+
+def _extract_company(text: str) -> str | None:
+    patterns = [
+        r"(?:current company|company|employer)\s*[:\-]?\s*([A-Za-z0-9&.,() \-]{3,100})",
+        r"(?:working at|worked at)\s+([A-Za-z0-9&.,() \-]{3,100})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text or "", flags=re.IGNORECASE)
+        if match:
+            return _clean_text(match.group(1))
+    return None
+
+
+def _months_from_years(years: int | None) -> int | None:
+    if years is None:
+        return None
+    return max(0, int(years) * 12)
+
+
+def _parse_education_rows(qualifications: list[str]) -> list[dict]:
+    rows = []
+    for qualification in qualifications or []:
+        rows.append(
+            {
+                "degree": _clean_text(qualification),
+                "specialization": None,
+                "institution": None,
+                "start_year": None,
+                "end_year": None,
+                "grade": None,
+                "source_confidence": 0.6,
+                "source_json": {"source": "qualification_list"},
+            }
+        )
+    return rows
+
+
+def _parse_project_rows(projects: list[str], role: str | None, domain: str | None, skills: list[str]) -> list[dict]:
+    rows = []
+    for project in projects or []:
+        rows.append(
+            {
+                "project_name": _clean_text(project) or "Project",
+                "role": role,
+                "domain": domain,
+                "tech_stack": skills[:8],
+                "description": _clean_text(project),
+                "start_date": None,
+                "end_date": None,
+                "source_confidence": 0.7,
+                "source_json": {"source": "project_list"},
+            }
+        )
+    return rows
+
+
+def _parse_experience_rows(full_text: str, structured_data: dict) -> list[dict]:
+    role = structured_data.get("role")
+    domain = structured_data.get("domain")
+    months = _months_from_years(structured_data.get("experience"))
+    company = _extract_company(full_text)
+    description = _clean_text((full_text or "")[:500])
+
+    if not any([role, company, months, description]):
+        return []
+
+    return [
+        {
+            "company_name": company,
+            "job_title": role,
+            "normalized_job_title": _normalize_title(role),
+            "start_date": None,
+            "end_date": None,
+            "is_current": True,
+            "duration_months": months,
+            "location": _extract_location(full_text)[0],
+            "description": description,
+            "domain_tags": [domain] if domain else [],
+            "source_confidence": 0.6,
+            "source_json": {"source": "synthetic_from_profile"},
+        }
+    ]
+
+
+def _parse_certification_rows(full_text: str) -> list[dict]:
+    rows = []
+    for line in re.split(r"[\n;]+", full_text or ""):
+        if "certif" not in line.lower():
+            continue
+        cleaned = _clean_text(line)
+        if cleaned:
+            rows.append(
+                {
+                    "certification_name": cleaned[:255],
+                    "issuer": None,
+                    "issued_at": None,
+                    "expires_at": None,
+                    "source_confidence": 0.5,
+                    "source_json": {"source": "text_line"},
+                }
+            )
+    return rows[:10]
+
+
+def _skill_rows(skills: list[str], total_experience_months: int | None) -> list[dict]:
+    rows = []
+    for index, skill in enumerate(skills or []):
+        normalized = _normalize_title(skill)
+        if not normalized:
+            continue
+        rows.append(
+            {
+                "skill_name_raw": skill,
+                "skill_name_normalized": normalized,
+                "skill_category": None,
+                "years_used_months": total_experience_months,
+                "last_used_year": date.today().year,
+                "proficiency_score": 0.8 if index < 5 else 0.6,
+                "is_primary": index < 5,
+                "source_confidence": 0.9,
+                "source_json": {"source": "structured_data"},
+            }
+        )
+    return rows
+
+
+def _build_summary(structured_data: dict, full_text: str) -> str:
+    parts = [
+        structured_data.get("candidate_name"),
+        structured_data.get("role"),
+        structured_data.get("domain"),
+        ", ".join(structured_data.get("skills", [])[:8]) if structured_data.get("skills") else None,
+    ]
+    summary = " | ".join(part for part in parts if part)
+    if summary:
+        return summary
+    return _clean_text((full_text or "")[:1000]) or ""
+
+
+def normalize_resume_profile(document_id: int, structured_data: dict, full_text: str, evidence_map: dict) -> dict:
+    email = _extract_email(full_text)
+    phone = _extract_phone(full_text)
+    location_city, location_state, location_country = _extract_location(full_text)
+    notice_period_days = _extract_notice_period_days(full_text)
+    current_ctc = _extract_ctc(full_text, "current")
+    expected_ctc = _extract_ctc(full_text, "expected")
+    total_experience_months = _months_from_years(structured_data.get("experience"))
+    summary = _build_summary(structured_data, full_text)
+
+    education_rows = _parse_education_rows(structured_data.get("qualifications") or [])
+    profile_payload = {
+        "candidate_name": structured_data.get("candidate_name"),
+        "email": email,
+        "phone": phone,
+        "location_city": location_city,
+        "location_state": location_state,
+        "location_country": location_country,
+        "current_company": _extract_company(full_text),
+        "current_role": structured_data.get("role"),
+        "normalized_title": _normalize_title(structured_data.get("role")),
+        "total_experience_months": total_experience_months,
+        "relevant_experience_months": total_experience_months,
+        "notice_period_days": notice_period_days,
+        "current_ctc": current_ctc,
+        "expected_ctc": expected_ctc,
+        "highest_education": education_rows[0]["degree"] if education_rows else None,
+        "summary": summary,
+        "domain_tags": [structured_data.get("domain")] if structured_data.get("domain") else [],
+        "confidence_score": 0.75,
+        "raw_profile_json": {
+            "structured_data": structured_data,
+            "evidence_map": evidence_map,
+        },
+    }
+    profile = upsert_resume_profile(document_id, profile_payload)
+    resume_profile_id = profile["id"]
+
+    skill_rows = _skill_rows(structured_data.get("skills") or [], total_experience_months)
+    experience_rows = _parse_experience_rows(full_text, structured_data)
+    project_rows = _parse_project_rows(
+        structured_data.get("projects") or [],
+        structured_data.get("role"),
+        structured_data.get("domain"),
+        structured_data.get("skills") or [],
+    )
+    certification_rows = _parse_certification_rows(full_text)
+
+    replace_resume_skills(resume_profile_id, skill_rows)
+    replace_resume_experiences(resume_profile_id, experience_rows)
+    replace_resume_projects(resume_profile_id, project_rows)
+    replace_resume_education(resume_profile_id, education_rows)
+    replace_resume_certifications(resume_profile_id, certification_rows)
+
+    search_payload = {
+        "candidate_name": structured_data.get("candidate_name"),
+        "normalized_title": _normalize_title(structured_data.get("role")),
+        "location_city": location_city,
+        "total_experience_months": total_experience_months,
+        "relevant_experience_months": total_experience_months,
+        "notice_period_days": notice_period_days,
+        "current_ctc": current_ctc,
+        "expected_ctc": expected_ctc,
+        "highest_education": education_rows[0]["degree"] if education_rows else None,
+        "skills_normalized": [row["skill_name_normalized"] for row in skill_rows],
+        "domains": [structured_data.get("domain")] if structured_data.get("domain") else [],
+        "companies": [profile_payload["current_company"]] if profile_payload["current_company"] else [],
+        "summary_text": summary,
+        "fulltext_tsv": summary,
+        "summary_embedding": create_embedding(summary).tolist() if summary else None,
+    }
+    upsert_resume_search_index(resume_profile_id, search_payload)
+
+    return {
+        "profile": profile,
+        "skills_count": len(skill_rows),
+        "experiences_count": len(experience_rows),
+        "projects_count": len(project_rows),
+        "education_count": len(education_rows),
+        "certifications_count": len(certification_rows),
+    }
