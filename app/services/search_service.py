@@ -152,6 +152,9 @@ def _serialize_candidate(row: Any, *, score: float | None = None, score_breakdow
         "score": score,
         "score_breakdown": score_breakdown or {},
         "evidence_snippets": evidence_snippets or [],
+        "review_status": document.review_status,
+        "canonical_data_ready": document.canonical_data_ready,
+        "uses_unreviewed_data": not document.canonical_data_ready,
     }
 
 
@@ -246,6 +249,9 @@ def search_resumes(query: str, page: int = 1, page_size: int = 20) -> dict:
                     "score": None,
                     "score_breakdown": {},
                     "evidence_snippets": [],
+                    "review_status": item.get("review_status"),
+                    "canonical_data_ready": item.get("canonical_data_ready", False),
+                    "uses_unreviewed_data": item.get("uses_unreviewed_data", True),
                 }
             payload["score"] = round(item.get("semantic_score", 0.0) * 100, 2)
             payload["score_breakdown"] = {"semantic_score": payload["score"]}
@@ -257,6 +263,7 @@ def search_resumes(query: str, page: int = 1, page_size: int = 20) -> dict:
             "page": page,
             "page_size": page_size,
             "results": normalized_results,
+            "uses_unreviewed_data": any(item.get("uses_unreviewed_data") for item in normalized_results),
             "fallback_notes": ["Semantic pgvector search was used."],
         }
 
@@ -307,6 +314,7 @@ def search_resumes(query: str, page: int = 1, page_size: int = 20) -> dict:
         "page": page,
         "page_size": page_size,
         "results": candidates,
+        "uses_unreviewed_data": any(item.get("uses_unreviewed_data") for item in candidates),
         "fallback_notes": ["Hybrid semantic rerank used."] if mode == "hybrid" else [],
     }
 

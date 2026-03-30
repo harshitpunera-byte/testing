@@ -1,26 +1,27 @@
 from app.rag.semantic_structurer import build_semantic_blocks
 
 
-def split_text(text, chunk_size=800, overlap=150):
-    words = text.split()
-    chunks = []
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+import tiktoken
 
-    if not words:
-        return chunks
+def count_tokens(text: str) -> int:
+    try:
+        encoder = tiktoken.get_encoding("cl100k_base")
+        return len(encoder.encode(text))
+    except Exception:
+        return len(text.split())
 
-    start = 0
-    step = max(1, chunk_size - overlap)
+def split_text(text: str, chunk_size: int = 800, overlap: int = 150) -> list[str]:
+    if not text or not text.strip():
+        return []
 
-    while start < len(words):
-        end = start + chunk_size
-        chunk = " ".join(words[start:end]).strip()
-
-        if chunk:
-            chunks.append(chunk)
-
-        start += step
-
-    return chunks
+    # Using RecursiveCharacterTextSplitter combined with tiktoken sizing
+    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        encoding_name="cl100k_base",
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+    )
+    return splitter.split_text(text.strip())
 
 
 def chunk_blocks(
@@ -52,7 +53,7 @@ def chunk_blocks(
                     "page_end": block.get("page_end"),
                     "embedding_backend": "pgvector",
                     "chunk_type": "semantic",
-                    "token_count": len(chunk_text.split()),
+                    "token_count": count_tokens(chunk_text),
                 }
             )
             next_chunk_id += 1

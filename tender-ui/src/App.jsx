@@ -4,6 +4,7 @@ import ResumeUpload from "./components/ResumeUpload";
 import TenderUpload from "./components/TenderUpload";
 import AskAgent from "./components/AskAgent";
 import InsightsPanel from "./components/InsightsPanel";
+import HumanInterventionModal from "./components/HumanInterventionModal";
 
 function App() {
   const [activeResumeDocumentIds, setActiveResumeDocumentIds] = useState([]);
@@ -16,11 +17,31 @@ function App() {
   const [systemMessage, setSystemMessage] = useState("");
   const [systemMessageIsError, setSystemMessageIsError] = useState(false);
   const [clearingDatabase, setClearingDatabase] = useState(false);
+  const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
+  const [selectedReviewTaskId, setSelectedReviewTaskId] = useState(null);
+  const [humanInterventionState, setHumanInterventionState] = useState(null);
+
+  const resolvePendingReviewTaskId = (nextTenderUpload = tenderUpload, nextResumeUploads = resumeUploads) => {
+    if (nextTenderUpload?.review_status === "needs_review" && nextTenderUpload?.review_task_id) {
+      return nextTenderUpload.review_task_id;
+    }
+
+    const resumeReviewRecord = (nextResumeUploads || []).find(
+      (item) => item?.review_status === "needs_review" && item?.review_task_id
+    );
+
+    return resumeReviewRecord?.review_task_id ?? null;
+  };
 
   const handleResumeUploadComplete = (documentIds = [], uploadedRecords = []) => {
     setActiveResumeDocumentIds(documentIds);
     setResumeUploads(uploadedRecords);
     setLatestMatchResult(null);
+    setHumanInterventionState(null);
+    setReviewRefreshKey((value) => value + 1);
+    setSelectedReviewTaskId(resolvePendingReviewTaskId(tenderUpload, uploadedRecords));
+    setSystemMessage("");
+    setSystemMessageIsError(false);
     setActiveWorkspaceTab("resume");
   };
 
@@ -28,14 +49,54 @@ function App() {
     setActiveTenderDocumentId(documentId);
     setTenderUpload(uploadedRecord);
     setLatestMatchResult(null);
+    setHumanInterventionState(null);
+    setReviewRefreshKey((value) => value + 1);
+    setSelectedReviewTaskId(resolvePendingReviewTaskId(uploadedRecord, resumeUploads));
+    setSystemMessage("");
+    setSystemMessageIsError(false);
     setActiveWorkspaceTab("tender");
   };
 
   const handleAnswerReady = (answerPayload) => {
     setLatestMatchResult(answerPayload);
+    const reviewTasks = Array.isArray(answerPayload?.review_tasks) ? answerPayload.review_tasks : [];
+
     if (Array.isArray(answerPayload?.matches) || answerPayload?.mode === "matching") {
       setActiveWorkspaceTab("profiles");
     }
+
+    if (answerPayload?.human_intervention_required && reviewTasks.length > 0) {
+      const initialTaskId = reviewTasks[0].id ?? null;
+      setSelectedReviewTaskId(initialTaskId);
+      setHumanInterventionState({
+        open: true,
+        reason:
+          answerPayload.human_intervention_reason ||
+          "Human review is needed for one or more uploaded documents before relying on this result.",
+        reviewTasks,
+      });
+      setSystemMessage("");
+      setSystemMessageIsError(false);
+      return;
+    }
+
+    setHumanInterventionState(null);
+    setSelectedReviewTaskId(resolvePendingReviewTaskId());
+    setSystemMessage("");
+    setSystemMessageIsError(false);
+  };
+
+  const closeHumanInterventionModal = () => {
+    setHumanInterventionState((current) => (current ? { ...current, open: false } : null));
+  };
+
+  const openReviewQueueFromModal = (taskId = null) => {
+    if (taskId) {
+      setSelectedReviewTaskId(taskId);
+    }
+    setHumanInterventionState(null);
+    setReviewRefreshKey((value) => value + 1);
+    setActiveWorkspaceTab("review");
   };
 
   const clearDatabase = async () => {
@@ -59,7 +120,10 @@ function App() {
       setResumeUploads([]);
       setTenderUpload(null);
       setLatestMatchResult(null);
+      setHumanInterventionState(null);
       setActiveWorkspaceTab("resume");
+      setSelectedReviewTaskId(null);
+      setReviewRefreshKey((value) => value + 1);
       setUiResetKey((value) => value + 1);
       setSystemMessage(res.data?.message || "Application database cleared successfully.");
     } catch (error) {
@@ -99,24 +163,26 @@ function App() {
         </div>
       </div>
 
-      <div className="p-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-gray-800 rounded-xl p-6 shadow-lg">
-          <h2 className="text-xl font-semibold mb-4">Upload Resumes</h2>
-          <ResumeUpload
-            key={`resume-${uiResetKey}`}
-            onUploadComplete={handleResumeUploadComplete}
-          />
+      <div className="grid grid-cols-1 gap-6 p-8 lg:grid-cols-4">
+        <div className="space-y-6 lg:col-span-1">
+          <div className="bg-gray-800 rounded-xl p-6 shadow-lg">
+            <h2 className="text-xl font-semibold mb-4">Upload Resumes</h2>
+            <ResumeUpload
+              key={`resume-${uiResetKey}`}
+              onUploadComplete={handleResumeUploadComplete}
+            />
+          </div>
+
+          <div className="bg-gray-800 rounded-xl p-6 shadow-lg">
+            <h2 className="text-xl font-semibold mb-4">Upload Tender</h2>
+            <TenderUpload
+              key={`tender-${uiResetKey}`}
+              onUploadComplete={handleTenderUploadComplete}
+            />
+          </div>
         </div>
 
-        <div className="bg-gray-800 rounded-xl p-6 shadow-lg">
-          <h2 className="text-xl font-semibold mb-4">Upload Tender</h2>
-          <TenderUpload
-            key={`tender-${uiResetKey}`}
-            onUploadComplete={handleTenderUploadComplete}
-          />
-        </div>
-
-        <div className="bg-gray-800 rounded-xl p-6 shadow-lg">
+        <div className="bg-gray-800 rounded-xl p-6 shadow-lg lg:col-span-3">
           <h2 className="text-xl font-semibold mb-4">Ask AI</h2>
           <AskAgent
             key={`ask-${uiResetKey}`}
@@ -133,6 +199,21 @@ function App() {
         resumeUploads={resumeUploads}
         tenderUpload={tenderUpload}
         latestMatchResult={latestMatchResult}
+        activeTenderDocumentId={activeTenderDocumentId}
+        reviewRefreshKey={reviewRefreshKey}
+        selectedReviewTaskId={selectedReviewTaskId}
+        onSelectReviewTask={setSelectedReviewTaskId}
+        onReviewTaskUpdated={() => setReviewRefreshKey((value) => value + 1)}
+      />
+
+      <HumanInterventionModal
+        open={Boolean(humanInterventionState?.open)}
+        reason={humanInterventionState?.reason || ""}
+        reviewTasks={humanInterventionState?.reviewTasks || []}
+        selectedTaskId={selectedReviewTaskId}
+        onSelectTask={setSelectedReviewTaskId}
+        onReviewNow={openReviewQueueFromModal}
+        onClose={closeHumanInterventionModal}
       />
     </div>
   );

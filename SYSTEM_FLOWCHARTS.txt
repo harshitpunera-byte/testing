@@ -87,7 +87,10 @@ Legend
                                                                v
                                                   +----------------------------+
                                                   | React UI renders results   |
-                                                  | JSON, profiles, PDF links  |
+                                                  | JSON, profiles, PDF links, |
+                                                  | and query-time review      |
+                                                  | intervention modal if      |
+                                                  | pending review exists      |
                                                   +----------------------------+
 
 
@@ -100,6 +103,12 @@ Legend
 - `POST /resumes/upload`
 - `POST /resumes/upload-multiple`
 - `POST /match/`
+- `POST /match/feedback`
+- `GET /reviews`
+- `GET /reviews/{task_id}`
+- `POST /reviews/{task_id}/approve`
+- `POST /reviews/{task_id}/correct`
+- `POST /reviews/{task_id}/reject`
 - `POST /search/resumes`
 - `GET /search/resumes/{document_id}`
 - `GET /documents/{document_id}/file`
@@ -149,9 +158,17 @@ Backend
         - embed text
         - persist `document_chunks`
         - run structured extraction
+        - evaluate extraction confidence + review summary
+        - if needed, create/update `review_tasks` + `review_items`
         - normalize resume profile if resume
         - persist evidence rows
         - update document status to `stored`
+
+Frontend behavior after upload
+- upload response shows review metadata if document needs review
+- review queue is prepared in backend at upload time
+- human intervention modal does not open during upload
+- user stays in upload/tender/resume workspace until they ask a query
 
 
 ===============================================================================
@@ -216,6 +233,10 @@ Main tables
 - `resume_certifications`
 - `field_evidence`
 - `resume_search_index`
+- `review_tasks`
+- `review_items`
+- `match_feedback`
+- `field_change_audit`
 - `alembic_version`
 
 Important note
@@ -241,6 +262,7 @@ QA
   --> load structured context
   --> prompt Ollama
   --> answer + sources
+  --> append human-intervention metadata for active scope
 
 Matching
   --> load tender requirements
@@ -249,6 +271,46 @@ Matching
   --> normalize / repair candidate data
   --> deterministic score
   --> LangGraph reasoning summary
+  --> append human-intervention metadata for active scope
+
+
+===============================================================================
+8A. REVIEW / HUMAN INTERVENTION FLOW
+===============================================================================
+
+At upload time
+  --> extraction review is evaluated in backend
+  --> if confidence/rules require review:
+      - document `review_status = needs_review`
+      - `canonical_data_ready = false`
+      - create or refresh pending review task
+  --> upload response returns:
+      - `review_status`
+      - `review_task_id`
+      - `review_summary`
+  --> frontend does not auto-open review UI on upload
+
+At query time
+  --> query service checks active tender/resume document IDs
+  --> load open review tasks for those active documents
+  --> if any open review task exists:
+      - `human_intervention_required = true`
+      - `human_intervention_reason` returned
+      - `review_tasks[]` returned
+  --> frontend opens query-time modal / popup
+  --> user can:
+      - `Open Review Queue`
+      - `Review Later`
+
+If user opens review queue
+  --> inspect extracted fields and evidence
+  --> approve / correct / reject task
+  --> canonical reviewed data becomes preferred automatically on next query
+
+Important runtime note
+- review task creation happens during ingestion
+- visible human intervention happens after query, only if needed
+- this mirrors chat-style interruption better than upload-time auto-navigation
 
 
 ===============================================================================
@@ -373,6 +435,7 @@ UPLOAD PATH
 QUERY PATH
   -> classify intent
   -> QA / Matching / Search
+  -> attach review-intervention state for active documents
 
 MATCHING
   -> load tender
@@ -380,3 +443,4 @@ MATCHING
   -> normalize / repair profiles
   -> deterministic scoring
   -> LangGraph reasoning
+  -> if pending review exists, frontend shows intervention modal

@@ -11,6 +11,10 @@ from app.models.db_models import (
     Document,
     DocumentChunk,
     FieldEvidence,
+    FieldChangeAudit,
+    MatchFeedback,
+    ReviewItem,
+    ReviewTask,
     ResumeCertification,
     ResumeEducation,
     ResumeExperience,
@@ -19,6 +23,13 @@ from app.models.db_models import (
     ResumeSearchIndex,
     ResumeSkill,
 )
+
+
+def _canonical_structured_payload(document: Document) -> dict:
+    if document.canonical_data_ready and document.reviewed_data_json:
+        return document.reviewed_data_json or {}
+    return document.structured_data_json or {}
+
 
 def _document_to_dict(document: Document | None) -> dict | None:
     if document is None:
@@ -40,9 +51,22 @@ def _document_to_dict(document: Document | None) -> dict | None:
         "extraction_backend": document.extraction_method,
         "structured_data": document.structured_data_json or {},
         "structured_data_json": document.structured_data_json or {},
+        "reviewed_data": document.reviewed_data_json or {},
+        "reviewed_data_json": document.reviewed_data_json or {},
+        "canonical_structured_data": _canonical_structured_payload(document),
         "evidence_map": document.evidence_map_json or {},
         "evidence_map_json": document.evidence_map_json or {},
         "metadata_json": document.metadata_json or {},
+        "review_status": document.review_status,
+        "auto_approved": document.auto_approved,
+        "approved_by": document.approved_by,
+        "approved_at": document.approved_at,
+        "has_human_corrections": document.has_human_corrections,
+        "extraction_confidence": document.extraction_confidence,
+        "canonical_data_ready": document.canonical_data_ready,
+        "uses_review_queue": document.uses_review_queue,
+        "review_summary": (document.metadata_json or {}).get("review_summary", {}),
+        "review_issues": ((document.metadata_json or {}).get("review_summary", {}) or {}).get("issues", []),
         "raw_text": document.raw_text or "",
         "markdown_text": document.markdown_text or "",
         "created_at": document.created_at,
@@ -185,8 +209,17 @@ def create_document_record(**fields) -> dict:
             raw_text=fields.get("raw_text", ""),
             markdown_text=fields.get("markdown_text", ""),
             structured_data_json=fields.get("structured_data", fields.get("structured_data_json", {})) or {},
+            reviewed_data_json=fields.get("reviewed_data", fields.get("reviewed_data_json", {})) or {},
             evidence_map_json=fields.get("evidence_map", fields.get("evidence_map_json", {})) or {},
             metadata_json=metadata_json,
+            review_status=fields.get("review_status", "not_needed"),
+            auto_approved=bool(fields.get("auto_approved", False)),
+            approved_by=fields.get("approved_by"),
+            approved_at=fields.get("approved_at"),
+            has_human_corrections=bool(fields.get("has_human_corrections", False)),
+            extraction_confidence=fields.get("extraction_confidence"),
+            canonical_data_ready=bool(fields.get("canonical_data_ready", False)),
+            uses_review_queue=bool(fields.get("uses_review_queue", False)),
         )
         db.add(document)
         db.flush()
@@ -209,6 +242,8 @@ def update_document_record(document_id: int, **fields) -> dict | None:
             "extraction_method": "extraction_method",
             "structured_data": "structured_data_json",
             "structured_data_json": "structured_data_json",
+            "reviewed_data": "reviewed_data_json",
+            "reviewed_data_json": "reviewed_data_json",
             "evidence_map": "evidence_map_json",
             "evidence_map_json": "evidence_map_json",
             "raw_text": "raw_text",
@@ -216,6 +251,14 @@ def update_document_record(document_id: int, **fields) -> dict | None:
             "mime_type": "mime_type",
             "stored_path": "stored_path",
             "file_size": "file_size",
+            "review_status": "review_status",
+            "auto_approved": "auto_approved",
+            "approved_by": "approved_by",
+            "approved_at": "approved_at",
+            "has_human_corrections": "has_human_corrections",
+            "extraction_confidence": "extraction_confidence",
+            "canonical_data_ready": "canonical_data_ready",
+            "uses_review_queue": "uses_review_queue",
         }
 
         for key, value in fields.items():
@@ -301,14 +344,17 @@ def rename_document_chunks(document_id: int, filename: str) -> int:
         return len(chunks)
 
 
-def get_index_chunks(index_name: str) -> list[dict]:
+def get_index_chunks(index_name: str, document_id: int | None = None) -> list[dict]:
     with session_scope() as db:
-        rows = db.execute(
+        statement = (
             select(DocumentChunk, Document.original_file_name, Document.document_type)
             .join(Document, Document.id == DocumentChunk.document_id)
             .where(Document.document_type == index_name, Document.processing_status == "stored")
-            .order_by(DocumentChunk.document_id.asc(), DocumentChunk.chunk_index.asc())
-        ).all()
+        )
+        if document_id is not None:
+            statement = statement.where(DocumentChunk.document_id == document_id)
+            
+        rows = db.execute(statement.order_by(DocumentChunk.document_id.asc(), DocumentChunk.chunk_index.asc())).all()
         return [_chunk_to_dict(chunk, original_filename, document_type) for chunk, original_filename, document_type in rows]
 
 
@@ -319,8 +365,16 @@ def delete_all_documents() -> dict[str, int]:
             "chunks_deleted": db.scalar(select(func.count()).select_from(DocumentChunk)) or 0,
             "resume_profiles_deleted": db.scalar(select(func.count()).select_from(ResumeProfile)) or 0,
             "evidence_deleted": db.scalar(select(func.count()).select_from(FieldEvidence)) or 0,
+            "review_tasks_deleted": db.scalar(select(func.count()).select_from(ReviewTask)) or 0,
+            "review_items_deleted": db.scalar(select(func.count()).select_from(ReviewItem)) or 0,
+            "match_feedback_deleted": db.scalar(select(func.count()).select_from(MatchFeedback)) or 0,
+            "field_change_audit_deleted": db.scalar(select(func.count()).select_from(FieldChangeAudit)) or 0,
         }
 
+        db.execute(delete(ReviewItem))
+        db.execute(delete(ReviewTask))
+        db.execute(delete(MatchFeedback))
+        db.execute(delete(FieldChangeAudit))
         db.execute(delete(FieldEvidence))
         db.execute(delete(ResumeSearchIndex))
         db.execute(delete(ResumeSkill))

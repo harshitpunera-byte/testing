@@ -50,8 +50,17 @@ class Document(Base, TimestampMixin):
     raw_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     markdown_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     structured_data_json: Mapped[dict] = mapped_column(json_type, default=dict, nullable=False)
+    reviewed_data_json: Mapped[dict] = mapped_column(json_type, default=dict, nullable=False)
     evidence_map_json: Mapped[dict] = mapped_column(json_type, default=dict, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(json_type, default=dict, nullable=False)
+    review_status: Mapped[str] = mapped_column(String(32), default="not_needed", nullable=False)
+    auto_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    has_human_corrections: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    extraction_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    canonical_data_ready: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    uses_review_queue: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     chunks: Mapped[list["DocumentChunk"]] = relationship(
         "DocumentChunk",
@@ -66,6 +75,16 @@ class Document(Base, TimestampMixin):
     )
     field_evidence: Mapped[list["FieldEvidence"]] = relationship(
         "FieldEvidence",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+    review_tasks: Mapped[list["ReviewTask"]] = relationship(
+        "ReviewTask",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+    field_change_audits: Mapped[list["FieldChangeAudit"]] = relationship(
+        "FieldChangeAudit",
         back_populates="document",
         cascade="all, delete-orphan",
     )
@@ -288,6 +307,90 @@ class FieldEvidence(Base):
 
     document: Mapped[Document] = relationship("Document", back_populates="field_evidence")
     resume_profile: Mapped[ResumeProfile | None] = relationship("ResumeProfile", back_populates="evidence_rows")
+
+
+class ReviewTask(Base, TimestampMixin):
+    __tablename__ = "review_tasks"
+    __table_args__ = (
+        Index("ix_review_tasks_document_status", "document_id", "status"),
+        Index("ix_review_tasks_document_type_status", "document_type", "status"),
+        Index("ix_review_tasks_task_type_status", "task_type", "status"),
+        Index("ix_review_tasks_priority", "priority"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    document_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    priority: Mapped[str] = mapped_column(String(16), default="medium", nullable=False)
+    assigned_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    document: Mapped[Document] = relationship("Document", back_populates="review_tasks")
+    items: Mapped[list["ReviewItem"]] = relationship(
+        "ReviewItem",
+        back_populates="review_task",
+        cascade="all, delete-orphan",
+    )
+
+
+class ReviewItem(Base, TimestampMixin):
+    __tablename__ = "review_items"
+    __table_args__ = (
+        Index("ix_review_items_task_status", "review_task_id", "review_status"),
+        Index("ix_review_items_field_name", "field_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    review_task_id: Mapped[int] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), nullable=False)
+    field_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    extracted_value: Mapped[dict | list | str | int | float | bool | None] = mapped_column(json_type, nullable=True)
+    corrected_value: Mapped[dict | list | str | int | float | bool | None] = mapped_column(json_type, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_critical: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    review_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+
+    review_task: Mapped[ReviewTask] = relationship("ReviewTask", back_populates="items")
+
+
+class MatchFeedback(Base):
+    __tablename__ = "match_feedback"
+    __table_args__ = (
+        Index("ix_match_feedback_tender_resume", "tender_document_id", "resume_document_id"),
+        Index("ix_match_feedback_human_decision", "human_decision"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tender_document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    resume_document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    system_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    human_decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FieldChangeAudit(Base):
+    __tablename__ = "field_change_audit"
+    __table_args__ = (
+        Index("ix_field_change_audit_document_field", "document_id", "field_name"),
+        Index("ix_field_change_audit_changed_at", "changed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    field_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    old_value: Mapped[dict | list | str | int | float | bool | None] = mapped_column(json_type, nullable=True)
+    new_value: Mapped[dict | list | str | int | float | bool | None] = mapped_column(json_type, nullable=True)
+    changed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    document: Mapped[Document] = relationship("Document", back_populates="field_change_audits")
 
 
 class ResumeSearchIndex(Base):

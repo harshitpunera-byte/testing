@@ -211,7 +211,15 @@ def _build_summary(structured_data: dict, full_text: str) -> str:
     return _clean_text((full_text or "")[:1000]) or ""
 
 
-def normalize_resume_profile(document_id: int, structured_data: dict, full_text: str, evidence_map: dict) -> dict:
+def normalize_resume_profile(
+    document_id: int,
+    structured_data: dict,
+    full_text: str,
+    evidence_map: dict,
+    *,
+    confidence_score: float | None = None,
+    source_kind: str = "raw_extraction",
+) -> dict:
     email = _extract_email(full_text)
     phone = _extract_phone(full_text)
     location_city, location_state, location_country = _extract_location(full_text)
@@ -240,10 +248,11 @@ def normalize_resume_profile(document_id: int, structured_data: dict, full_text:
         "highest_education": education_rows[0]["degree"] if education_rows else None,
         "summary": summary,
         "domain_tags": [structured_data.get("domain")] if structured_data.get("domain") else [],
-        "confidence_score": 0.75,
+        "confidence_score": confidence_score if confidence_score is not None else 0.75,
         "raw_profile_json": {
             "structured_data": structured_data,
             "evidence_map": evidence_map,
+            "source_kind": source_kind,
         },
     }
     profile = upsert_resume_profile(document_id, profile_payload)

@@ -54,36 +54,52 @@ def _flattened_length(pages: list[PageText]) -> int:
 
 
 def _has_meaningful_text(pages: list[PageText], minimum_chars: int = 50) -> bool:
-    text = flatten_pages(pages)
-    if len(text) <= minimum_chars:
+    if not pages:
         return False
 
-    normalized = re.sub(r"\s+", " ", text).strip()
-    normalized = re.sub(
-        r"==>\s*picture\s*\[[^\]]+\]\s*intentionally omitted\s*<==",
-        " ",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    normalized = re.sub(
-        r"picture\s+\d+\s+x\s+\d+\s+intentionally omitted",
-        " ",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    normalized = re.sub(r"[^A-Za-z\s]", " ", normalized)
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-
-    if len(normalized) <= minimum_chars:
+    meaningful_pages = 0
+    total_chars = 0
+    
+    for page in pages:
+        text = page.text or ""
+        total_chars += len(text)
+        
+        normalized = re.sub(r"\s+", " ", text).strip()
+        normalized = re.sub(
+            r"==>\s*picture\s*\[[^\]]+\]\s*intentionally omitted\s*<==",
+            " ",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(
+            r"picture\s+\d+\s+x\s+\d+\s+intentionally omitted",
+            " ",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(r"[^A-Za-z\s]", " ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        
+        if len(normalized) <= 20: 
+            continue
+            
+        tokens = normalized.split()
+        meaningful_tokens = [
+            token
+            for token in tokens
+            if len(token) > 2 and token.lower() not in {"picture", "intentionally", "omitted"}
+        ]
+        
+        if len(meaningful_tokens) >= 8:
+            meaningful_pages += 1
+            
+    if total_chars <= minimum_chars:
         return False
-
-    tokens = normalized.split()
-    meaningful_tokens = [
-        token
-        for token in tokens
-        if len(token) > 2 and token.lower() not in {"picture", "intentionally", "omitted"}
-    ]
-    return len(meaningful_tokens) >= 8
+        
+    if len(pages) > 3 and (meaningful_pages / len(pages)) < 0.3:
+        return False
+        
+    return meaningful_pages > 0
 
 
 def _page_number_from_chunk(page_chunk: dict, fallback_page: int) -> int:

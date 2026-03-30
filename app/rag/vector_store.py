@@ -7,7 +7,8 @@ from typing import Any
 import numpy as np
 from sqlalchemy import case, desc, func, literal, select
 
-from app.database.connection import DATABASE_URL, _is_postgres, session_scope
+from app.database import connection as db_connection
+from app.database.connection import _is_postgres, session_scope
 from app.database.vector import PGVECTOR_INSTALLED
 from app.models.db_models import Document, DocumentChunk, ResumeProfile, ResumeSearchIndex
 from app.rag.embeddings import EMBEDDING_DIM, create_embedding, create_embeddings
@@ -115,10 +116,10 @@ def _cosine_distance(a: np.ndarray, b: np.ndarray | list[float] | None) -> float
     return 1.0 - (numerator / denominator)
 
 
-def _semantic_search_postgres(index_name: str, query_vector: list[float], top_k: int) -> list[dict]:
+def _semantic_search_postgres(index_name: str, query_vector: list[float], top_k: int, document_id: int | None = None) -> list[dict]:
     with session_scope() as db:
         distance_expr = DocumentChunk.embedding.cosine_distance(query_vector)
-        rows = db.execute(
+        statement = (
             select(DocumentChunk, Document.original_file_name, Document.document_type, distance_expr.label("distance"))
             .join(Document, Document.id == DocumentChunk.document_id)
             .where(
@@ -126,9 +127,11 @@ def _semantic_search_postgres(index_name: str, query_vector: list[float], top_k:
                 Document.processing_status == "stored",
                 DocumentChunk.embedding.is_not(None),
             )
-            .order_by(distance_expr.asc())
-            .limit(top_k)
-        ).all()
+        )
+        if document_id is not None:
+            statement = statement.where(DocumentChunk.document_id == document_id)
+            
+        rows = db.execute(statement.order_by(distance_expr.asc()).limit(top_k)).all()
 
     results = []
     for chunk, original_file_name, document_type, distance in rows:
@@ -140,26 +143,59 @@ def _semantic_search_postgres(index_name: str, query_vector: list[float], top_k:
     return results
 
 
-def _semantic_search_fallback(index_name: str, query_vector: np.ndarray, top_k: int) -> list[dict]:
-    chunks = get_index_chunks(index_name)
-    scored = []
+def _semantic_search_fallback(
+    index_name: str,
+    query_vector: np.ndarray,
+    top_k: int,
+    document_id: int | None = None,
+) -> list[dict]:
+    chunks = get_index_chunks(index_name, document_id=document_id)
+    if not chunks:
+        return []
+
+    q_arr = np.asarray(query_vector, dtype="float32")
+    q_norm = np.linalg.norm(q_arr)
+    if q_norm == 0:
+        q_norm = 1.0
+
+    embeddings = []
+    valid_chunks = []
     for chunk in chunks:
-        distance = _cosine_distance(query_vector, chunk.get("embedding"))
-        item = dict(chunk)
-        item["distance"] = distance
+        emb = chunk.get("embedding")
+        if emb is not None:
+            embeddings.append(emb)
+            valid_chunks.append(dict(chunk))
+
+    if not embeddings:
+        return []
+
+    emb_matrix = np.asarray(embeddings, dtype="float32")
+    emb_norms = np.linalg.norm(emb_matrix, axis=1)
+    
+    # Avoid zero division
+    emb_norms[emb_norms == 0] = 1.0
+
+    dot_products = np.dot(emb_matrix, q_arr)
+    distances = 1.0 - (dot_products / (emb_norms * q_norm))
+
+    scored = []
+    for i, dist in enumerate(distances):
+        item = valid_chunks[i]
+        item["distance"] = float(dist)
         scored.append(item)
+
     scored.sort(key=lambda item: item.get("distance", math.inf))
     return scored[:top_k]
 
 
-def search_index(index_name: str, query_text: str, top_k: int = 3):
+def search_index(index_name: str, query_text: str, top_k: int = 3, document_id: int | None = None):
     if not query_text or not query_text.strip():
         return []
 
     query_vector = embed_text(query_text)
-    if _is_postgres(DATABASE_URL) and PGVECTOR_INSTALLED:
-        return _semantic_search_postgres(index_name, _normalize_vector(query_vector), top_k)
-    return _semantic_search_fallback(index_name, query_vector, top_k)
+    if _is_postgres(db_connection.DATABASE_URL) and PGVECTOR_INSTALLED:
+        return _semantic_search_postgres(index_name, _normalize_vector(query_vector), top_k, document_id=document_id)
+    return _semantic_search_fallback(index_name, query_vector, top_k, document_id=document_id)
 
 
 def search_index_hybrid(
@@ -168,14 +204,17 @@ def search_index_hybrid(
     top_k: int = 6,
     semantic_multiplier: int = 4,
     lexical_multiplier: int = 8,
+    document_id: int | None = None,
 ):
     if not query_text or not query_text.strip():
         return []
 
     semantic_limit = max(top_k, top_k * semantic_multiplier)
-    semantic_results = search_index(index_name, query_text, top_k=semantic_limit)
+    semantic_results = search_index(index_name, query_text, top_k=semantic_limit, document_id=document_id)
 
-    chunks = get_index_chunks(index_name)
+    # Note: Keyword score is still global or handled later, 
+    # but we ensure the base pool contains only relevant docs.
+    chunks = get_index_chunks(index_name, document_id=document_id)
     lexical_scored = []
     for idx, item in enumerate(chunks):
         score = _keyword_score(query_text, item.get("text", ""))
@@ -295,7 +334,7 @@ def get_chunk_window(
 
 def search_resume_profiles_semantic(query_text: str, top_k: int = 10, profile_ids: list[int] | None = None) -> list[dict]:
     query_embedding = embed_text(query_text)
-    if _is_postgres(DATABASE_URL) and PGVECTOR_INSTALLED:
+    if _is_postgres(db_connection.DATABASE_URL) and PGVECTOR_INSTALLED:
         query_vector = _normalize_vector(query_embedding)
         with session_scope() as db:
             distance_expr = ResumeSearchIndex.summary_embedding.cosine_distance(query_vector)
@@ -322,6 +361,9 @@ def search_resume_profiles_semantic(query_text: str, top_k: int = 10, profile_id
                 "normalized_title": profile.normalized_title,
                 "skills": search_row.skills_normalized or [],
                 "summary_text": search_row.summary_text,
+                "review_status": document.review_status,
+                "canonical_data_ready": document.canonical_data_ready,
+                "uses_unreviewed_data": not document.canonical_data_ready,
                 "distance": float(distance),
                 "semantic_score": max(0.0, 1.0 - float(distance)),
             }
@@ -350,6 +392,9 @@ def search_resume_profiles_semantic(query_text: str, top_k: int = 10, profile_id
                 "normalized_title": profile.normalized_title,
                 "skills": search_row.skills_normalized or [],
                 "summary_text": search_row.summary_text,
+                "review_status": document.review_status,
+                "canonical_data_ready": document.canonical_data_ready,
+                "uses_unreviewed_data": not document.canonical_data_ready,
                 "distance": float(distance),
                 "semantic_score": max(0.0, 1.0 - float(distance)),
             }

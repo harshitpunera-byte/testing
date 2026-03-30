@@ -10,8 +10,17 @@ def _build_candidate_reasoning(match: Dict) -> str:
     candidate_experience = match.get("candidate_experience")
     required_experience = match.get("required_experience")
     experience_match = match.get("experience_match", False)
+    disqualifiers = match.get("disqualifiers", [])
+    comparison_mismatches = match.get("comparison_mismatches", [])
 
     reasons: List[str] = []
+
+    if disqualifiers:
+        reasons.append(
+            "This appears to be a false positive because "
+            + "; ".join(disqualifiers)
+            + "."
+        )
 
     if matched_skills:
         reasons.append(
@@ -43,6 +52,13 @@ def _build_candidate_reasoning(match: Dict) -> str:
     else:
         reasons.append("No required skills are missing based on current extraction.")
 
+    if comparison_mismatches and not disqualifiers:
+        reasons.append(
+            "Important context mismatches were also detected: "
+            + "; ".join(comparison_mismatches)
+            + "."
+        )
+
     reasons.append(f"Overall suitability score is {score}% and verdict is {verdict}.")
 
     return " ".join(reasons)
@@ -70,11 +86,19 @@ def reasoning_agent(state: Dict) -> Dict:
             rejected.append(match.get("filename", "unknown.pdf"))
 
     summary_parts = []
+    valid_matches = [
+        match for match in enriched_matches
+        if match.get("eligibility_intent_match", True)
+    ]
 
-    if enriched_matches:
-        best = enriched_matches[0]
+    if valid_matches:
+        best = valid_matches[0]
         summary_parts.append(
             f"Top candidate is {best.get('filename', 'unknown.pdf')} with score {best.get('score', 0)}%."
+        )
+    elif enriched_matches:
+        summary_parts.append(
+            "No valid candidate match was found; retrieved resumes only had superficial keyword overlap."
         )
     else:
         summary_parts.append("No matching resumes were found.")

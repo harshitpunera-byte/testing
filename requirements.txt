@@ -14,3 +14,5 @@ pillow
 pytesseract
 langgraph
 pytest
+langchain-text-splitters
+tiktoken

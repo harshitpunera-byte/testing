@@ -1,7 +1,7 @@
 from datetime import date, datetime
 import html
 import re
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from app.llm.resume_llm_extractor import extract_resume_profile_llm
 
@@ -136,6 +136,14 @@ ADDRESS_HINTS = {
     "state",
     "street",
     "village",
+}
+
+RESUME_REVIEW_THRESHOLD = 0.80
+RESUME_CRITICAL_FIELDS = {
+    "candidate_name",
+    "role",
+    "experience",
+    "skills",
 }
 
 
@@ -793,3 +801,150 @@ def extract_candidate_name(text: str) -> str | None:
 
 def extract_candidate_role(text: str) -> str | None:
     return _extract_role(text)
+
+
+def _review_is_missing(value: Any) -> bool:
+    return value in (None, "", []) or (isinstance(value, list) and not [item for item in value if item not in (None, "")])
+
+
+def _review_evidence_entries(value: Any) -> list[dict]:
+    if isinstance(value, list):
+        return [entry for entry in value if isinstance(entry, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _review_best_evidence(value: Any) -> dict:
+    entries = _review_evidence_entries(value)
+    if not entries:
+        return {}
+    return max(entries, key=lambda entry: float(entry.get("confidence", 0.0) or 0.0))
+
+
+def _review_average_confidence(value: Any) -> float:
+    entries = _review_evidence_entries(value)
+    if not entries:
+        return 0.0
+    return round(sum(float(entry.get("confidence", 0.0) or 0.0) for entry in entries) / len(entries), 2)
+
+
+def _clamp_confidence(value: float) -> float:
+    return round(max(0.0, min(0.99, value)), 2)
+
+
+def _resume_field_confidence(field_name: str, value: Any, evidence_value: Any) -> float:
+    evidence_confidence = _review_average_confidence(evidence_value)
+
+    if _review_is_missing(value):
+        return 0.0
+
+    if field_name == "candidate_name":
+        token_count = len(str(value).split())
+        heuristic = 0.94 if 2 <= token_count <= 4 else 0.72
+        return _clamp_confidence((heuristic * 0.6) + (evidence_confidence * 0.4))
+
+    if field_name == "role":
+        heuristic = 0.84 if 1 <= len(str(value).split()) <= 8 else 0.62
+        return _clamp_confidence((heuristic * 0.55) + (evidence_confidence * 0.45))
+
+    if field_name == "experience":
+        try:
+            years = int(value)
+        except (TypeError, ValueError):
+            years = None
+        heuristic = 0.86 if years is not None and 0 <= years <= 45 else 0.35
+        return _clamp_confidence((heuristic * 0.65) + (evidence_confidence * 0.35))
+
+    if field_name == "skills":
+        count = len(value or [])
+        if count >= 5:
+            heuristic = 0.92
+        elif count >= 3:
+            heuristic = 0.82
+        elif count >= 1:
+            heuristic = 0.58
+        else:
+            heuristic = 0.0
+        return _clamp_confidence((heuristic * 0.7) + (evidence_confidence * 0.3))
+
+    if isinstance(value, list):
+        heuristic = 0.72 if value else 0.0
+        return _clamp_confidence((heuristic * 0.6) + (evidence_confidence * 0.4))
+
+    heuristic = 0.72 if str(value).strip() else 0.0
+    return _clamp_confidence((heuristic * 0.6) + (evidence_confidence * 0.4))
+
+
+def build_resume_review_payload(
+    text: str,
+    structured_data: dict[str, Any],
+    evidence_map: dict[str, Any],
+    *,
+    extraction_backend: str | None = None,
+) -> dict[str, Any]:
+    fields: dict[str, dict[str, Any]] = {}
+    issues: list[str] = []
+    missing_critical_fields: list[str] = []
+
+    for field_name, value in (structured_data or {}).items():
+        evidence = _review_best_evidence((evidence_map or {}).get(field_name))
+        confidence = _resume_field_confidence(field_name, value, (evidence_map or {}).get(field_name))
+        is_critical = field_name in RESUME_CRITICAL_FIELDS
+        if is_critical and _review_is_missing(value):
+            missing_critical_fields.append(field_name)
+
+        fields[field_name] = {
+            "value": value,
+            "confidence": confidence,
+            "evidence_page": evidence.get("page"),
+            "evidence_text": evidence.get("source_text"),
+            "is_critical": is_critical,
+        }
+
+        if is_critical and confidence < RESUME_REVIEW_THRESHOLD:
+            issues.append(f"low_confidence_{field_name}")
+
+    if missing_critical_fields:
+        for field_name in missing_critical_fields:
+            issues.append(f"missing_{field_name}")
+
+    if extraction_backend and "ocr" in extraction_backend.lower():
+        issues.append("ocr_used")
+
+    normalized_text = (text or "").strip()
+    if len(normalized_text) < 400:
+        issues.append("limited_extracted_text")
+
+    skill_count = len(structured_data.get("skills") or [])
+    if skill_count < 2:
+        issues.append("sparse_skills")
+
+    scored_fields = [field["confidence"] for field in fields.values() if field["value"] not in (None, "", [])]
+    overall_confidence = sum(scored_fields) / len(scored_fields) if scored_fields else 0.0
+
+    if "ocr_used" in issues:
+        overall_confidence -= 0.12
+    if "limited_extracted_text" in issues:
+        overall_confidence -= 0.08
+    if "sparse_skills" in issues:
+        overall_confidence -= 0.06
+    if missing_critical_fields:
+        overall_confidence -= 0.10 * len(missing_critical_fields)
+
+    overall_confidence = _clamp_confidence(overall_confidence)
+    recommended_review = (
+        overall_confidence < RESUME_REVIEW_THRESHOLD
+        or bool(missing_critical_fields)
+        or "ocr_used" in issues
+        or "sparse_skills" in issues
+    )
+
+    return {
+        "fields": fields,
+        "overall_confidence": overall_confidence,
+        "issues": list(dict.fromkeys(issues)),
+        "missing_critical_fields": missing_critical_fields,
+        "recommended_review": recommended_review,
+        "raw_profile": structured_data or {},
+    }

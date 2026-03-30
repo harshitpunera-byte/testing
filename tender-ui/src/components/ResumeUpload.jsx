@@ -191,6 +191,11 @@ export default function ResumeUpload({ onUploadComplete }) {
               <p><strong>File:</strong> {result.filename}</p>
               <p><strong>Chunks:</strong> {result.chunks}</p>
               <p><strong>Stored Chunks:</strong> {result.stored_chunks}</p>
+              {result.review_status && <p><strong>Review Status:</strong> {result.review_status}</p>}
+              {result.extraction_confidence !== undefined && (
+                <p><strong>Extraction Confidence:</strong> {result.extraction_confidence}</p>
+              )}
+              {result.review_task_id && <p><strong>Review Task:</strong> #{result.review_task_id}</p>}
             </div>
           )}
 
@@ -206,7 +211,7 @@ export default function ResumeUpload({ onUploadComplete }) {
                   <ul className="max-h-40 space-y-1 overflow-auto">
                     {result.processed.map((item, index) => (
                       <li key={index}>
-                        {item.filename} — status: {item.status}, chunks: {item.chunks}, stored: {item.stored_chunks}
+                        {item.filename} — status: {item.status}, chunks: {item.chunks}, stored: {item.stored_chunks}, review: {item.review_status || "n/a"}
                       </li>
                     ))}
                   </ul>

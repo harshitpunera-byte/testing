@@ -31,44 +31,47 @@ The active runtime path keeps the existing upload and `/match/` APIs, but the st
 
 - Python 3.11+
 - Node.js 18+
-- Docker Desktop or a local PostgreSQL 16 instance
+- Local PostgreSQL 16 instance managed from pgAdmin
 - Ollama running locally for extraction/reasoning
 
 ## Local Setup
 
 1. Copy env:
 
-```powershell
-Copy-Item .env.example .env
+```bash
+cp .env.example .env
 ```
 
-2. Start PostgreSQL + pgvector:
+2. Install backend deps:
 
-```powershell
-docker compose up -d postgres
+```bash
+python3 -m pip install -r requirements.txt
 ```
 
-3. Install backend deps:
+3. Start PostgreSQL + pgvector.
 
-```powershell
-python -m pip install -r requirements.txt
-```
+pgAdmin path:
+- make sure a local PostgreSQL server is installed and running
+- open pgAdmin and connect to that server
+- create a database named `tender_rag`
+- open Query Tool on `tender_rag`
+- run [scripts/pgadmin_setup.sql](/Users/ramjeetsingh/Desktop/]/tender-rag-system/scripts/pgadmin_setup.sql)
 
-4. Run migrations:
+4. Bootstrap the database:
 
-```powershell
-alembic upgrade head
+```bash
+POSTGRES_SKIP_CREATE_DB=1 python3 scripts/bootstrap_postgres.py
 ```
 
 5. Run backend:
 
-```powershell
+```bash
 uvicorn app.main:app --reload
 ```
 
 6. Run frontend:
 
-```powershell
+```bash
 cd tender-ui
 npm install
 npm run dev
@@ -79,7 +82,13 @@ npm run dev
 Default `.env.example`:
 
 ```env
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=tender_rag
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
 DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/tender_rag
+RUN_ALEMBIC_MIGRATIONS_ON_STARTUP=0
 EMBEDDING_DIM=384
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.2
@@ -88,10 +97,17 @@ OLLAMA_REASONING_MODEL=mistral
 MAX_UPLOAD_FILE_SIZE_MB=25
 ```
 
+Notes:
+- If `DATABASE_URL` is omitted, the app derives it from `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`.
+- `POSTGRES_SKIP_CREATE_DB=1` is useful when the database is created manually from pgAdmin.
+- Set `RUN_ALEMBIC_MIGRATIONS_ON_STARTUP=1` if you want the app to auto-apply Alembic migrations on PostgreSQL startup.
+
 ## Database Notes
 
 - Startup validates DB connectivity.
+- `GET /system/health` now reports the applied Alembic revision and masks DB passwords in the returned URL.
 - On PostgreSQL, startup also validates `CREATE EXTENSION IF NOT EXISTS vector`.
+- pgAdmin is only the admin client; the PostgreSQL server itself still must be installed and running locally.
 - SQLite remains minimally usable for development, but full production search behavior is intended for PostgreSQL.
 
 ## Main APIs
@@ -133,14 +149,14 @@ Supported search behavior:
 
 Backend DB smoke check:
 
-```powershell
-python scripts/smoke_test_postgres.py
+```bash
+python3 scripts/smoke_test_postgres.py
 ```
 
 Lightweight tests:
 
-```powershell
-pytest
+```bash
+python3 -m pytest
 ```
 
 ## Manual Test Flow

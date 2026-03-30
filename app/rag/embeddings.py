@@ -42,7 +42,9 @@ def _get_model():
         return _model
     except Exception as exc:
         _model_failed = True
-        print(f"Embedding model unavailable locally, using hash fallback: {exc}")
+        import logging
+        logging.getLogger(__name__).error(f"CRITICAL: Embedding model {MODEL_NAME} failed to load! Falling back to non-semantic SHA256 hashes. RAG retrieval will severely degrade. Error: {exc}")
+        print(f"CRITICAL WARNING: Embedding model {MODEL_NAME} unavailable. Generating non-semantic SHA256 hash fallback: {exc}")
         return None
 
 

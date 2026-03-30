@@ -1,9 +1,13 @@
 import { getDocumentFileUrl } from "../api/api";
+import MatchFeedbackPanel from "./MatchFeedbackPanel";
+import ReviewDetail from "./ReviewDetail";
+import ReviewQueue from "./ReviewQueue";
 
 const TAB_OPTIONS = [
   { id: "resume", label: "Resume JSON" },
   { id: "tender", label: "Tender JSON" },
   { id: "profiles", label: "Profiles" },
+  { id: "review", label: "Review Queue" },
 ];
 
 function buildResumeJson(resumeUploads) {
@@ -11,9 +15,13 @@ function buildResumeJson(resumeUploads) {
     document_id: item.document_id,
     filename: item.filename,
     status: item.status,
+    review_status: item.review_status,
+    extraction_confidence: item.extraction_confidence,
+    canonical_data_ready: item.canonical_data_ready,
     pages: item.pages,
     extraction_backend: item.extraction_backend,
     structured_data: item.structured_data || {},
+    review_summary: item.review_summary || {},
     evidence_map: item.evidence_map || {},
   }));
 }
@@ -27,9 +35,13 @@ function buildTenderJson(tenderUpload) {
     document_id: tenderUpload.document_id,
     filename: tenderUpload.filename,
     status: tenderUpload.status,
+    review_status: tenderUpload.review_status,
+    extraction_confidence: tenderUpload.extraction_confidence,
+    canonical_data_ready: tenderUpload.canonical_data_ready,
     pages: tenderUpload.pages,
     extraction_backend: tenderUpload.extraction_backend,
     structured_data: tenderUpload.structured_data || {},
+    review_summary: tenderUpload.review_summary || {},
     evidence_map: tenderUpload.evidence_map || {},
   };
 }
@@ -73,6 +85,11 @@ export default function InsightsPanel({
   resumeUploads = [],
   tenderUpload = null,
   latestMatchResult = null,
+  activeTenderDocumentId = null,
+  reviewRefreshKey = 0,
+  selectedReviewTaskId = null,
+  onSelectReviewTask,
+  onReviewTaskUpdated,
 }) {
   const resumeJson = buildResumeJson(resumeUploads);
   const tenderJson = buildTenderJson(tenderUpload);
@@ -155,9 +172,13 @@ export default function InsightsPanel({
                         document_id: item.document_id,
                         filename: item.filename,
                         status: item.status,
+                        review_status: item.review_status,
+                        extraction_confidence: item.extraction_confidence,
+                        canonical_data_ready: item.canonical_data_ready,
                         pages: item.pages,
                         extraction_backend: item.extraction_backend,
                         structured_data: item.structured_data || {},
+                        review_summary: item.review_summary || {},
                         evidence_map: item.evidence_map || {},
                       }}
                     />
@@ -210,6 +231,12 @@ export default function InsightsPanel({
           <>
             {profiles.length > 0 ? (
               <div className="space-y-5">
+                {latestMatchResult?.uses_unreviewed_data && (
+                  <div className="rounded-2xl border border-amber-400/20 bg-amber-500/5 p-4 text-sm text-amber-100">
+                    Matching is currently using one or more unreviewed documents. Review approved canonical data will be preferred automatically when available.
+                  </div>
+                )}
+
                 {latestMatchResult?.reasoning_summary && (
                   <div className="rounded-2xl border border-amber-400/20 bg-amber-500/5 p-4 text-sm text-amber-100">
                     {latestMatchResult.reasoning_summary}
@@ -218,30 +245,45 @@ export default function InsightsPanel({
 
                 <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/60">
                   {profiles.map((profile, index) => (
-                    <button
+                    <div
                       key={`${profile.document_id || profile.filename}-${index}`}
-                      type="button"
-                      onClick={() => openDocument(profile.document_id)}
-                      disabled={!profile.document_id}
-                      className="flex w-full items-start justify-between gap-4 border-b border-slate-800 px-4 py-4 text-left transition hover:bg-slate-800/80 disabled:cursor-not-allowed disabled:opacity-50 last:border-b-0"
+                      className="border-b border-slate-800 px-4 py-4 last:border-b-0"
                     >
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-white">
-                          #{index + 1} {profile.candidate_name || profile.filename || "Unknown Candidate"}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-400">
-                          {profile.candidate_role || "Role not detected"} | {profile.candidate_domain || "Domain not detected"}
-                        </p>
-                        <p className="mt-1 line-clamp-2 text-xs text-slate-500">
-                          {profile.filename}
-                        </p>
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-white">
+                            #{index + 1} {profile.candidate_name || profile.filename || "Unknown Candidate"}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-400">
+                            {profile.candidate_role || "Role not detected"} | {profile.candidate_domain || "Domain not detected"}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Review: {profile.review_status || "unknown"} {profile.uses_unreviewed_data ? "· unreviewed data in use" : "· canonical approved data"}
+                          </p>
+                          <p className="mt-1 line-clamp-2 text-xs text-slate-500">
+                            {profile.filename}
+                          </p>
+                        </div>
+
+                        <div className="shrink-0 text-right">
+                          <p className="text-lg font-semibold text-cyan-300">{profile.score || 0}%</p>
+                          <p className="text-xs text-slate-300">{profile.verdict || "Unranked"}</p>
+                          <button
+                            type="button"
+                            onClick={() => openDocument(profile.document_id)}
+                            disabled={!profile.document_id}
+                            className="mt-3 rounded-xl border border-cyan-400/40 px-3 py-2 text-xs text-cyan-200 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Open Resume
+                          </button>
+                        </div>
                       </div>
 
-                      <div className="shrink-0 text-right">
-                        <p className="text-lg font-semibold text-cyan-300">{profile.score || 0}%</p>
-                        <p className="text-xs text-slate-300">{profile.verdict || "Unranked"}</p>
-                      </div>
-                    </button>
+                      <MatchFeedbackPanel
+                        tenderDocumentId={activeTenderDocumentId}
+                        match={profile}
+                      />
+                    </div>
                   ))}
                 </div>
               </div>
@@ -252,6 +294,22 @@ export default function InsightsPanel({
               />
             )}
           </>
+        )}
+
+        {activeTab === "review" && (
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.95fr_1.35fr]">
+            <ReviewQueue
+              refreshKey={reviewRefreshKey}
+              selectedTaskId={selectedReviewTaskId}
+              onSelectTask={onSelectReviewTask}
+            />
+
+            <ReviewDetail
+              taskId={selectedReviewTaskId}
+              refreshKey={reviewRefreshKey}
+              onTaskUpdated={onReviewTaskUpdated}
+            />
+          </div>
         )}
       </div>
     </section>

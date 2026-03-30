@@ -105,7 +105,7 @@ def _coerce_to_json_object(raw: str, schema: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
 
-    return _fallback_from_schema(schema)
+    raise ValueError(f"Failed to extract valid JSON from LLM: {raw[:100]}...")
 def _set_ollama_backoff(seconds: int, reason: str, log_message: str) -> None:
     global _ollama_backoff_until, _ollama_backoff_reason
 
@@ -175,7 +175,7 @@ def _extract_ollama_content(parsed_response: dict) -> str:
     return raw_content
 
 
-def _call_ollama_json(prompt: str, schema: dict, task: str = "default") -> str:
+def _call_ollama_json(prompt: str, schema: dict, task: str = "default", max_retries: int = 3) -> str:
     payload = {
         "messages": [
             {
@@ -196,14 +196,19 @@ def _call_ollama_json(prompt: str, schema: dict, task: str = "default") -> str:
 
     last_error = None
 
-    for model_name in _ollama_models_for_task(task):
-        try:
-            parsed_response = _ollama_request(payload, model_name=model_name)
-            raw_content = _extract_ollama_content(parsed_response)
-            return json.dumps(_coerce_to_json_object(raw_content, schema))
-        except Exception as exc:
-            last_error = exc
-            print(f"Ollama model '{model_name}' failed for {task}, trying next option.")
+    for attempt in range(max_retries):
+        for model_name in _ollama_models_for_task(task):
+            try:
+                parsed_response = _ollama_request(payload, model_name=model_name)
+                raw_content = _extract_ollama_content(parsed_response)
+                return json.dumps(_coerce_to_json_object(raw_content, schema))
+            except Exception as exc:
+                last_error = exc
+                print(f"Ollama model '{model_name}' failed/hallucinated for {task} on attempt {attempt+1}: {exc}")
+                
+        if attempt < max_retries - 1:
+            print(f"Retrying JSON extraction (attempt {attempt+2}/{max_retries})...")
+            time.sleep(1)
 
     if last_error:
         _backoff_ollama_after_failure(last_error)

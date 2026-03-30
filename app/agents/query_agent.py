@@ -35,6 +35,18 @@ TENDER_HINTS = {
     "authority",
     "qualification",
     "requirements",
+    "loa",
+    "clause",
+    "definition",
+    "glossary",
+    "net worth",
+    "financial",
+    "chainage",
+    "ch.",
+    "project cost",
+    "amount",
+    "value",
+    "contract",
 }
 
 RESUME_HINTS = {
@@ -48,33 +60,41 @@ RESUME_HINTS = {
     "skill",
     "experience",
     "project",
+    "staff",
+    "member",
+    "personnel",
+    "resource",
+    "dob",
+    "birth",
 }
 
 
 def classify_query_intent(query: str, has_tender: bool, has_resume: bool) -> dict:
     lowered = " ".join(query.lower().split())
 
+    # Check for matching intent first
     is_match_query = has_tender and has_resume and any(keyword in lowered for keyword in MATCH_KEYWORDS)
     if is_match_query:
         return {"mode": "matching", "scope": "both"}
 
-    if has_tender and not has_resume:
+    # Smart Routing logic
+    tender_hint = any(keyword in lowered for keyword in TENDER_HINTS)
+    resume_hint = any(keyword in lowered for keyword in RESUME_HINTS)
+
+    # 1. Both found (or ambiguous) -> Search Both for safety
+    if (tender_hint and resume_hint) or (not tender_hint and not resume_hint and has_tender and has_resume):
+        if has_tender and has_resume:
+            return {"mode": "qa", "scope": "both"}
+
+    # 2. Only Tender signal found
+    if tender_hint or (has_tender and not has_resume):
         return {"mode": "qa", "scope": "tender"}
 
-    if has_resume and not has_tender:
+    # 3. Only Resume signal found
+    if resume_hint or (has_resume and not has_tender):
         return {"mode": "qa", "scope": "resume"}
 
-    if has_tender and has_resume:
-        tender_hint = any(keyword in lowered for keyword in TENDER_HINTS)
-        resume_hint = any(keyword in lowered for keyword in RESUME_HINTS)
-
-        if tender_hint and not resume_hint:
-            return {"mode": "qa", "scope": "tender"}
-        if resume_hint and not tender_hint:
-            return {"mode": "qa", "scope": "resume"}
-
-        return {"mode": "qa", "scope": "both"}
-
+    # Default Fallback
     return {"mode": "none", "scope": "none"}
 
 
@@ -82,13 +102,13 @@ def build_answer_prompt(query: str, scope_label: str, structured_contexts: list[
     structured_json = json.dumps(structured_contexts[:2], ensure_ascii=True, indent=2)
 
     rendered_chunks = []
-    for index, chunk in enumerate(chunks[:5], start=1):
+    for index, chunk in enumerate(chunks[:20], start=1):
         filename = chunk.get("filename", "unknown.pdf")
         page_start = chunk.get("page_start") or "?"
         page_end = chunk.get("page_end") or page_start
         section = chunk.get("section") or "general"
         text = chunk.get("text", "").strip()
-        compact_text = " ".join(text.split())[:1200]
+        compact_text = " ".join(text.split())
         rendered_chunks.append(
             f"[{index}] file={filename} page={page_start}-{page_end} section={section}\n{compact_text}"
         )
@@ -96,25 +116,66 @@ def build_answer_prompt(query: str, scope_label: str, structured_contexts: list[
     chunk_block = "\n\n".join(rendered_chunks)
 
     return f"""
-You answer questions using only the supplied {scope_label} context.
+YOU ARE A DATA EXTRACTION SPECIALIST. 
+I am providing you with context from TWO DIFFERENT DATA SOURCES (Tenders and Resumes).
+Your job is to answer the user's question without mixing data between these two documents.
 
-Rules:
-- Answer directly and concisely.
-- Treat retrieved context as the primary evidence.
-- Use structured context only as a secondary hint and ignore it if it conflicts with retrieved context.
-- If multiple uploaded documents support different answers, say the question is ambiguous and list the plausible answers with sources.
-- If the answer is not supported by the context, say so clearly.
-- Mention source filename and page numbers when possible.
-- Do not invent facts.
+The evidence below is already SOURCE-LABELED and intentionally INTERLEAVED.
+Read it in the order provided so neither source type gets ignored.
 
-Question:
-{query}
-
-Structured context:
+========= STRUCTURED CONTEXT (BEST EFFORT) =========
 {structured_json}
 
-Retrieved context:
+========= ORDERED EVIDENCE SNIPPETS =========
 {chunk_block}
+
+USER QUESTION: {query}
+
+MISSION RULES:
+1. Every answer must use the SPECIFIC source label on the evidence snippet ([TENDER SOURCE] or [RESUME SOURCE]).
+2. If the user asks for candidate name or DOB, you MUST EXTRACT IT directly. DO NOT provide external links or say "it can be found at this link".
+3. If the user asks for Project Name, LOA, or Clauses, use ONLY [TENDER SOURCE] evidence.
+4. For Financial values (Net Worth/Cost), provide the EXACT NUMBER (e.g., 332.59 Cr).
+5. DO NOT provide URLs or Links. Provide the actual information from the text.
+6. Explicitly mention which source label provided which part of the answer.
+7. If the context has a DOB, you MUST say it.
+8. If a snippet contains a direct field/value pair or glossary-style mapping (for example, "Date of Birth: 1st July 1970" or "LOA As defined in Clause 3.8.4"), copy that exact value instead of inferring.
+""".strip()
+
+
+def build_exact_fact_summary_prompt(query: str, extracted_facts: str, chunks: list[dict]) -> str:
+    rendered_chunks = []
+    for index, chunk in enumerate(chunks[:8], start=1):
+        filename = chunk.get("filename", "unknown.pdf")
+        page_start = chunk.get("page_start") or "?"
+        page_end = chunk.get("page_end") or page_start
+        text = " ".join(str(chunk.get("text", "")).split())
+        rendered_chunks.append(
+            f"[{index}] file={filename} page={page_start}-{page_end}\n{text[:500]}"
+        )
+
+    evidence_block = "\n\n".join(rendered_chunks)
+
+    return f"""
+YOU ARE A PRECISION ANALYST.
+The exact facts below were extracted deterministically from the source documents and are already trusted.
+Your job is ONLY to add a short interpretation or connective summary.
+
+USER QUESTION:
+{query}
+
+EXTRACTED FACTS:
+{extracted_facts}
+
+SUPPORTING EVIDENCE:
+{evidence_block}
+
+RULES:
+1. Do NOT change, reinterpret, or contradict any extracted fact.
+2. Do NOT introduce new dates, clauses, costs, names, or values.
+3. Keep the response to 2-4 short sentences.
+4. Focus on separating tender facts from resume facts where useful.
+5. If there is no meaningful interpretation to add, reply exactly: NO_ADDITIONAL_INTERPRETATION
 """.strip()
 
 

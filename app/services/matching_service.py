@@ -11,7 +11,9 @@ from app.services.document_repository import (
     get_persisted_document_chunks,
     update_document_record,
 )
+from app.services.document_intent import compare_tender_and_resume
 from app.services.evidence_service import build_evidence_map
+from app.services.review_service import document_uses_unreviewed_data, preferred_structured_data
 from app.services.resume_name_service import repair_resume_structured_data
 from app.services.search_service import search_resumes
 
@@ -159,7 +161,7 @@ def _build_document_text(chunks, fallback_text="", limit=None, document_type="re
     return text or fallback_text
 
 
-def _score_candidate(tender_data, resume_data):
+def _score_candidate(tender_data, resume_data, *, tender_text: str = "", resume_text: str = ""):
     required_skills = tender_data.get("skills_required", [])
     preferred_skills = tender_data.get("preferred_skills", [])
     required_experience = _to_int(tender_data.get("experience_required"))
@@ -220,6 +222,17 @@ def _score_candidate(tender_data, resume_data):
         min(100, skill_score + preferred_score + role_score + domain_score + experience_score),
         2
     )
+    comparison_assessment = compare_tender_and_resume(
+        tender_text=tender_text,
+        resume_text=resume_text,
+        tender_data=tender_data,
+        resume_data=resume_data,
+    )
+
+    if not comparison_assessment.get("is_valid_match", True):
+        role_match = False
+        experience_match = False
+        final_score = 0.0
 
     verdict = _build_verdict(final_score, experience_match)
 
@@ -234,6 +247,12 @@ def _score_candidate(tender_data, resume_data):
         "domain_match": domain_match,
         "score": final_score,
         "verdict": verdict,
+        "eligibility_intent_match": comparison_assessment.get("is_valid_match", True),
+        "disqualifiers": comparison_assessment.get("critical_mismatches", []),
+        "comparison_mismatches": comparison_assessment.get("mismatches", []),
+        "comparison_verdict": comparison_assessment.get("verdict"),
+        "tender_document_intent": comparison_assessment.get("tender_intent", {}),
+        "resume_document_intent": comparison_assessment.get("resume_intent", {}),
     }
 
 
@@ -292,6 +311,9 @@ def _load_document_chunks(document_type: str, document: dict | None = None, matc
 
 
 def _extract_or_load_structured_data(document_type: str, document: dict | None, chunks: list[dict], fallback_text: str) -> tuple[dict, dict]:
+    if document and document.get("canonical_data_ready") and preferred_structured_data(document):
+        return preferred_structured_data(document), document.get("evidence_map", {})
+
     if document and document.get("structured_data"):
         structured_data = document["structured_data"]
         evidence_map = document.get("evidence_map", {})
@@ -377,6 +399,9 @@ def match_resumes_with_uploaded_tender(
             "message": "No uploaded tender data found for the current session.",
             "tender_requirements": _default_tender_requirements(),
             "tender_evidence_map": {},
+            "tender_review_status": None,
+            "tender_canonical_data_ready": False,
+            "uses_unreviewed_data": False,
             "matches": [],
             "reasoning_summary": "No tender available for reasoning.",
         }
@@ -386,6 +411,9 @@ def match_resumes_with_uploaded_tender(
             "message": "No uploaded resume data found for the current session.",
             "tender_requirements": _default_tender_requirements(),
             "tender_evidence_map": {},
+            "tender_review_status": None,
+            "tender_canonical_data_ready": False,
+            "uses_unreviewed_data": False,
             "matches": [],
             "reasoning_summary": "No resume matches were available for reasoning.",
         }
@@ -400,6 +428,9 @@ def match_resumes_with_uploaded_tender(
             "message": "No uploaded tender data found. Please upload a tender PDF first.",
             "tender_requirements": _default_tender_requirements(),
             "tender_evidence_map": {},
+            "tender_review_status": None,
+            "tender_canonical_data_ready": False,
+            "uses_unreviewed_data": False,
             "matches": [],
             "reasoning_summary": "No tender available for reasoning.",
         }
@@ -417,6 +448,13 @@ def match_resumes_with_uploaded_tender(
         tender_document_chunks,
         tender_fallback_text,
     )
+    tender_context_text = _build_document_text(
+        tender_document_chunks,
+        fallback_text=tender_fallback_text,
+        limit=8,
+        document_type="tender",
+    )
+    tender_uses_unreviewed = document_uses_unreviewed_data(primary_tender_document)
 
     resume_search_query = _build_resume_search_query(query, tender_data)
     if active_resume_documents:
@@ -447,12 +485,16 @@ def match_resumes_with_uploaded_tender(
             "message": "No resume matches found. Please upload resume PDFs first.",
             "tender_requirements": tender_data,
             "tender_evidence_map": tender_evidence_map,
+            "tender_review_status": (primary_tender_document or {}).get("review_status"),
+            "tender_canonical_data_ready": (primary_tender_document or {}).get("canonical_data_ready", False),
+            "uses_unreviewed_data": tender_uses_unreviewed,
             "matches": [],
             "reasoning_summary": "No resume matches were available for reasoning.",
         }
 
     results = []
     seen_candidates = set()
+    uses_unreviewed_data = tender_uses_unreviewed
 
     for match in resume_matches:
         resume_document = _resolve_document("resume", match, fallback_latest=False)
@@ -474,8 +516,19 @@ def match_resumes_with_uploaded_tender(
             resume_chunks,
             resume_fallback_text,
         )
+        resume_analysis_text = _build_document_text(
+            resume_chunks,
+            fallback_text=resume_fallback_text,
+            limit=6,
+            document_type="resume",
+        )
 
-        scored = _score_candidate(tender_data, resume_data)
+        scored = _score_candidate(
+            tender_data,
+            resume_data,
+            tender_text=tender_context_text,
+            resume_text=resume_analysis_text,
+        )
         resume_context = _build_document_text(
             resume_chunks,
             fallback_text=resume_fallback_text,
@@ -495,9 +548,13 @@ def match_resumes_with_uploaded_tender(
                 "candidate_qualifications": resume_data.get("qualifications", []),
                 "candidate_projects": resume_data.get("projects", []),
                 "candidate_evidence_map": resume_evidence_map,
+                "review_status": (resume_document or {}).get("review_status"),
+                "canonical_data_ready": (resume_document or {}).get("canonical_data_ready", False),
+                "uses_unreviewed_data": document_uses_unreviewed_data(resume_document),
                 **scored,
             }
         )
+        uses_unreviewed_data = uses_unreviewed_data or document_uses_unreviewed_data(resume_document)
 
     results.sort(key=lambda item: (item["score"], item["experience_match"]), reverse=True)
 
@@ -513,6 +570,9 @@ def match_resumes_with_uploaded_tender(
         "message": "Matching completed using uploaded tender.",
         "tender_requirements": tender_data,
         "tender_evidence_map": tender_evidence_map,
+        "tender_review_status": (primary_tender_document or {}).get("review_status"),
+        "tender_canonical_data_ready": (primary_tender_document or {}).get("canonical_data_ready", False),
+        "uses_unreviewed_data": uses_unreviewed_data,
         "matches": graph_result.get("matches", results),
         "reasoning_summary": graph_result.get("reasoning_summary", ""),
     }

@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from app.llm.tender_llm_extractor import extract_tender_requirements_llm
 
@@ -27,6 +27,14 @@ PERSONNEL_MARKERS = [
     "team leader",
     "professional",
 ]
+
+TENDER_REVIEW_THRESHOLD = 0.80
+TENDER_CRITICAL_FIELDS = {
+    "role",
+    "skills_required",
+    "experience_required",
+    "domain",
+}
 
 
 def _normalize_whitespace(value: str) -> str:
@@ -228,6 +236,7 @@ def extract_tender_requirements(text: str):
     data = extract_tender_requirements_llm(text)
 
     llm_skills = _unique(data.skills_required or [])
+    llm_preferred_skills = _unique(data.preferred_skills or [])
     llm_qualifications = _unique(data.qualifications or [])
     llm_responsibilities = _unique(data.responsibilities or [])
 
@@ -235,8 +244,162 @@ def extract_tender_requirements(text: str):
         "role": heuristic["role"] or data.role,
         "domain": heuristic["domain"] or data.domain,
         "skills_required": heuristic["skills_required"] or llm_skills,
-        "preferred_skills": heuristic["preferred_skills"],
-        "experience_required": heuristic["experience_required"],
+        "preferred_skills": heuristic["preferred_skills"] or llm_preferred_skills,
+        "experience_required": heuristic["experience_required"] or data.experience_required,
         "qualifications": heuristic["qualifications"] or llm_qualifications,
         "responsibilities": heuristic["responsibilities"] or llm_responsibilities,
+    }
+
+
+def _review_is_missing(value: Any) -> bool:
+    return value in (None, "", []) or (isinstance(value, list) and not [item for item in value if item not in (None, "")])
+
+
+def _review_evidence_entries(value: Any) -> list[dict]:
+    if isinstance(value, list):
+        return [entry for entry in value if isinstance(entry, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _review_best_evidence(value: Any) -> dict:
+    entries = _review_evidence_entries(value)
+    if not entries:
+        return {}
+    return max(entries, key=lambda entry: float(entry.get("confidence", 0.0) or 0.0))
+
+
+def _review_average_confidence(value: Any) -> float:
+    entries = _review_evidence_entries(value)
+    if not entries:
+        return 0.0
+    return round(sum(float(entry.get("confidence", 0.0) or 0.0) for entry in entries) / len(entries), 2)
+
+
+def _clamp_confidence(value: float) -> float:
+    return round(max(0.0, min(0.99, value)), 2)
+
+
+def _tender_field_confidence(field_name: str, value: Any, evidence_value: Any) -> float:
+    evidence_confidence = _review_average_confidence(evidence_value)
+
+    if _review_is_missing(value):
+        return 0.0
+
+    if field_name == "skills_required":
+        count = len(value or [])
+        if count >= 4:
+            heuristic = 0.92
+        elif count >= 2:
+            heuristic = 0.82
+        else:
+            heuristic = 0.55
+        return _clamp_confidence((heuristic * 0.7) + (evidence_confidence * 0.3))
+
+    if field_name == "preferred_skills":
+        heuristic = 0.72 if value else 0.0
+        return _clamp_confidence((heuristic * 0.65) + (evidence_confidence * 0.35))
+
+    if field_name == "experience_required":
+        try:
+            years = int(value)
+        except (TypeError, ValueError):
+            years = None
+        heuristic = 0.82 if years is not None and 0 <= years <= 45 else 0.35
+        return _clamp_confidence((heuristic * 0.65) + (evidence_confidence * 0.35))
+
+    if field_name == "role":
+        heuristic = 0.86 if 2 <= len(str(value).split()) <= 12 else 0.62
+        return _clamp_confidence((heuristic * 0.6) + (evidence_confidence * 0.4))
+
+    if field_name == "domain":
+        heuristic = 0.78 if str(value).strip() else 0.0
+        return _clamp_confidence((heuristic * 0.65) + (evidence_confidence * 0.35))
+
+    if isinstance(value, list):
+        heuristic = 0.7 if value else 0.0
+        return _clamp_confidence((heuristic * 0.6) + (evidence_confidence * 0.4))
+
+    heuristic = 0.7 if str(value).strip() else 0.0
+    return _clamp_confidence((heuristic * 0.6) + (evidence_confidence * 0.4))
+
+
+def build_tender_review_payload(
+    text: str,
+    structured_data: dict[str, Any],
+    evidence_map: dict[str, Any],
+    *,
+    extraction_backend: str | None = None,
+) -> dict[str, Any]:
+    fields: dict[str, dict[str, Any]] = {}
+    issues: list[str] = []
+    missing_critical_fields: list[str] = []
+
+    for field_name, value in (structured_data or {}).items():
+        evidence = _review_best_evidence((evidence_map or {}).get(field_name))
+        confidence = _tender_field_confidence(field_name, value, (evidence_map or {}).get(field_name))
+        is_critical = field_name in TENDER_CRITICAL_FIELDS
+
+        if is_critical and _review_is_missing(value):
+            missing_critical_fields.append(field_name)
+
+        fields[field_name] = {
+            "value": value,
+            "confidence": confidence,
+            "evidence_page": evidence.get("page"),
+            "evidence_text": evidence.get("source_text"),
+            "is_critical": is_critical,
+        }
+
+        if is_critical and confidence < TENDER_REVIEW_THRESHOLD:
+            issues.append(f"low_confidence_{field_name}")
+
+    if missing_critical_fields:
+        for field_name in missing_critical_fields:
+            issues.append(f"missing_{field_name}")
+
+    if extraction_backend and "ocr" in extraction_backend.lower():
+        issues.append("ocr_used")
+
+    if len((text or "").strip()) < 500:
+        issues.append("limited_extracted_text")
+
+    required_skill_count = len(structured_data.get("skills_required") or [])
+    preferred_skill_count = len(structured_data.get("preferred_skills") or [])
+    if required_skill_count == 0 and preferred_skill_count == 0:
+        issues.append("empty_skill_requirements")
+    elif required_skill_count < 2:
+        issues.append("sparse_required_skills")
+
+    overall_scores = [field["confidence"] for field in fields.values() if field["value"] not in (None, "", [])]
+    overall_confidence = sum(overall_scores) / len(overall_scores) if overall_scores else 0.0
+
+    if "ocr_used" in issues:
+        overall_confidence -= 0.12
+    if "limited_extracted_text" in issues:
+        overall_confidence -= 0.08
+    if "empty_skill_requirements" in issues:
+        overall_confidence -= 0.14
+    if "sparse_required_skills" in issues:
+        overall_confidence -= 0.08
+    if missing_critical_fields:
+        overall_confidence -= 0.10 * len(missing_critical_fields)
+
+    overall_confidence = _clamp_confidence(overall_confidence)
+    recommended_review = (
+        overall_confidence < TENDER_REVIEW_THRESHOLD
+        or bool(missing_critical_fields)
+        or "ocr_used" in issues
+        or "empty_skill_requirements" in issues
+        or "sparse_required_skills" in issues
+    )
+
+    return {
+        "fields": fields,
+        "overall_confidence": overall_confidence,
+        "issues": list(dict.fromkeys(issues)),
+        "missing_critical_fields": missing_critical_fields,
+        "recommended_review": recommended_review,
+        "raw_profile": structured_data or {},
     }

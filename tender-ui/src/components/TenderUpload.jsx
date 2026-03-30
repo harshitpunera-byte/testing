@@ -102,6 +102,11 @@ export default function TenderUpload({ onUploadComplete }) {
           <p><strong>Status:</strong> {result.status}</p>
           <p><strong>Chunks:</strong> {result.chunks}</p>
           <p><strong>Stored Chunks:</strong> {result.stored_chunks}</p>
+          {result.review_status && <p><strong>Review Status:</strong> {result.review_status}</p>}
+          {result.extraction_confidence !== undefined && (
+            <p><strong>Extraction Confidence:</strong> {result.extraction_confidence}</p>
+          )}
+          {result.review_task_id && <p><strong>Review Task:</strong> #{result.review_task_id}</p>}
           {result.pages !== undefined && <p><strong>Pages:</strong> {result.pages}</p>}
           {result.extraction_backend && (
             <p><strong>Extraction Backend:</strong> {result.extraction_backend}</p>

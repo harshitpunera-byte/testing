@@ -32,4 +32,23 @@ export const getDocumentFileUrl = (documentId) => {
 export const matchResumes = (tenderText) =>
   API.post("/match/", { tender_text: tenderText });
 
+export const getReviewTasks = (params = {}) => API.get("/reviews", { params });
+
+export const getReviewTask = (taskId) => API.get(`/reviews/${taskId}`);
+
+export const approveReviewTask = (taskId, payload = {}) =>
+  API.post(`/reviews/${taskId}/approve`, payload);
+
+export const correctReviewTask = (taskId, payload = {}) =>
+  API.post(`/reviews/${taskId}/correct`, payload);
+
+export const rejectReviewTask = (taskId, payload = {}) =>
+  API.post(`/reviews/${taskId}/reject`, payload);
+
+export const approveTenderCriteria = (documentId, payload = {}) =>
+  API.post(`/tenders/${documentId}/approve-criteria`, payload);
+
+export const submitMatchFeedback = (payload = {}) =>
+  API.post("/match/feedback", payload);
+
 export default API;

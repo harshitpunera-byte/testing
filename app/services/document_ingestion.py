@@ -10,6 +10,7 @@ from app.rag.vector_store import invalidate_index, store_document_chunks
 from app.services.document_repository import (
     create_document_record,
     get_document_by_hash,
+    get_document_by_id,
     get_persisted_document_chunks,
     get_resume_profile_with_relations,
     purge_document_artifacts,
@@ -20,6 +21,7 @@ from app.services.document_repository import (
 from app.services.evidence_service import build_evidence_map
 from app.services.evidence_service import persist_evidence_map
 from app.services.profile_normalizer import normalize_resume_profile
+from app.services.review_service import preferred_structured_data, sync_document_review_state
 from app.utils.file_hash import compute_sha256_bytes
 from app.utils.file_storage import build_storage_name, save_file_bytes
 from app.utils.file_validator import validate_pdf_upload
@@ -45,6 +47,8 @@ CHUNK_CONFIG = {
     "resume": {"chunk_size": 800, "overlap": 150},
 }
 
+INGESTION_PIPELINE_VERSION = "2026-03-26-exact-facts-v1"
+
 
 def _build_error_response(filename: str, message: str, status: str) -> dict:
     return {
@@ -56,6 +60,14 @@ def _build_error_response(filename: str, message: str, status: str) -> dict:
         "document_id": None,
         "normalization": None,
     }
+
+
+def _can_reuse_existing_document(existing: dict | None) -> bool:
+    if not existing or existing.get("status") == "failed":
+        return False
+
+    metadata_json = existing.get("metadata_json") or {}
+    return metadata_json.get("pipeline_version") == INGESTION_PIPELINE_VERSION
 
 
 async def process_uploaded_document(file, document_type: str) -> dict:
@@ -76,8 +88,9 @@ async def process_uploaded_document(file, document_type: str) -> dict:
 
     file_hash = compute_sha256_bytes(file_bytes)
     existing = get_document_by_hash(document_type, file_hash)
+    can_reuse_existing = _can_reuse_existing_document(existing)
 
-    if existing and existing.get("status") != "failed":
+    if can_reuse_existing and existing:
         updated_existing = update_document_record(
             existing["id"],
             original_filename=original_filename,
@@ -100,6 +113,12 @@ async def process_uploaded_document(file, document_type: str) -> dict:
             "evidence_map": updated_existing.get("evidence_map", {}),
             "pages": updated_existing.get("total_pages"),
             "extraction_backend": updated_existing.get("extraction_backend"),
+            "review_status": updated_existing.get("review_status"),
+            "auto_approved": updated_existing.get("auto_approved"),
+            "canonical_data_ready": updated_existing.get("canonical_data_ready"),
+            "uses_review_queue": updated_existing.get("uses_review_queue"),
+            "extraction_confidence": updated_existing.get("extraction_confidence"),
+            "review_summary": updated_existing.get("review_summary", {}),
             "normalization": (
                 get_resume_profile_with_relations(updated_existing.get("id"))
                 if document_type == "resume" and updated_existing.get("id") is not None
@@ -115,7 +134,7 @@ async def process_uploaded_document(file, document_type: str) -> dict:
 
     document_record = None
     try:
-        if existing and existing.get("status") == "failed":
+        if existing and not can_reuse_existing:
             document_record = update_document_record(
                 existing["id"],
                 original_filename=original_filename,
@@ -124,7 +143,12 @@ async def process_uploaded_document(file, document_type: str) -> dict:
                 file_size=len(file_bytes),
                 status="processing",
                 structured_data={},
+                reviewed_data={},
                 evidence_map={},
+                canonical_data_ready=False,
+                auto_approved=False,
+                review_status="not_needed",
+                metadata_json={"pipeline_version": INGESTION_PIPELINE_VERSION},
             )
         else:
             document_record = create_document_record(
@@ -138,6 +162,7 @@ async def process_uploaded_document(file, document_type: str) -> dict:
                 status="processing",
                 structured_data={},
                 evidence_map={},
+                metadata_json={"pipeline_version": INGESTION_PIPELINE_VERSION},
             )
 
         extracted = load_pdf_pages(file_bytes, document_name=original_filename)
@@ -202,15 +227,27 @@ async def process_uploaded_document(file, document_type: str) -> dict:
             metadata_json={
                 "total_pages": len(cleaned_pages),
                 "chunk_count": len(chunk_records),
+                "pipeline_version": INGESTION_PIPELINE_VERSION,
             },
         )
+        review_state = sync_document_review_state(
+            document_id=(updated_document or document_record)["id"],
+            document_type=document_type,
+            text=full_text,
+            structured_data=structured_data,
+            evidence_map=evidence_map,
+            extraction_backend=extracted.backend,
+        )
+        updated_document = get_document_by_id((updated_document or document_record)["id"])
         normalization_result = None
         if document_type == "resume":
             normalization_result = normalize_resume_profile(
                 updated_document["id"] if updated_document else document_record["id"],
-                structured_data,
+                preferred_structured_data(updated_document) or structured_data,
                 full_text,
                 evidence_map,
+                confidence_score=(updated_document or {}).get("extraction_confidence"),
+                source_kind="canonical_reviewed" if (updated_document or {}).get("canonical_data_ready") else "raw_extraction",
             )
             persist_evidence_map(
                 updated_document["id"] if updated_document else document_record["id"],
@@ -240,6 +277,13 @@ async def process_uploaded_document(file, document_type: str) -> dict:
             "extraction_backend": extracted.backend,
             "structured_data": structured_data,
             "evidence_map": evidence_map,
+            "review_status": (updated_document or {}).get("review_status"),
+            "auto_approved": (updated_document or {}).get("auto_approved"),
+            "canonical_data_ready": (updated_document or {}).get("canonical_data_ready"),
+            "uses_review_queue": (updated_document or {}).get("uses_review_queue"),
+            "extraction_confidence": (updated_document or {}).get("extraction_confidence"),
+            "review_task_id": review_state.get("review_task_id"),
+            "review_summary": review_state.get("review_summary", {}),
             "normalization": normalization_result,
         }
     except Exception as exc:

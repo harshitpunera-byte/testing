@@ -407,7 +407,7 @@ A.
 
 5. Query
 - classify intent
-- QA / matching / search
+- QA / matching / searcha
 
 6. Match
 - retrieve candidates

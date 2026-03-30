@@ -10,8 +10,8 @@ def search_resume_vectors(query: str, top_k: int = 3) -> List[Dict]:
     return search_index(RESUME_INDEX_NAME, query, top_k)
 
 
-def search_resume_vectors_hybrid(query: str, top_k: int = 6) -> List[Dict]:
-    return search_index_hybrid(RESUME_INDEX_NAME, query, top_k)
+def search_resume_vectors_hybrid(query: str, top_k: int = 6, document_id: int | None = None) -> List[Dict]:
+    return search_index_hybrid(RESUME_INDEX_NAME, query, top_k, document_id=document_id)
 
 
 def get_resume_document_chunks(
