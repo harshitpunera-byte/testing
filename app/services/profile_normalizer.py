@@ -13,6 +13,7 @@ from app.services.document_repository import (
     upsert_resume_profile,
     upsert_resume_search_index,
 )
+from app.services.matching_utils import resolve_qualification_generic_key
 
 
 EMAIL_PATTERN = re.compile(r"([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})", re.IGNORECASE)
@@ -91,38 +92,43 @@ def _months_from_years(years: int | None) -> int | None:
     return max(0, int(years) * 12)
 
 
-def _parse_education_rows(qualifications: list[str]) -> list[dict]:
+def _parse_education_rows(qualifications: list[dict]) -> list[dict]:
     rows = []
-    for qualification in qualifications or []:
+    for item in qualifications or []:
+        raw = item.get("raw")
+        generic = item.get("generic")
         rows.append(
             {
-                "degree": _clean_text(qualification),
+                "degree": _clean_text(raw),
+                "generic_key": generic or resolve_qualification_generic_key(raw),
                 "specialization": None,
                 "institution": None,
                 "start_year": None,
                 "end_year": None,
                 "grade": None,
-                "source_confidence": 0.6,
-                "source_json": {"source": "qualification_list"},
+                "source_confidence": 0.8,
+                "source_json": {"source": "structured_normalization"},
             }
         )
     return rows
 
 
-def _parse_project_rows(projects: list[str], role: str | None, domain: str | None, skills: list[str]) -> list[dict]:
+def _parse_project_rows(projects: list[dict], role: str | None, domain: str | None) -> list[dict]:
     rows = []
-    for project in projects or []:
+    for item in projects or []:
+        raw = item.get("raw")
+        tags = item.get("generic_tags", [])
         rows.append(
             {
-                "project_name": _clean_text(project) or "Project",
+                "project_name": _clean_text(raw) or "Project",
                 "role": role,
                 "domain": domain,
-                "tech_stack": skills[:8],
-                "description": _clean_text(project),
+                "tech_stack": tags,
+                "description": _clean_text(raw),
                 "start_date": None,
                 "end_date": None,
-                "source_confidence": 0.7,
-                "source_json": {"source": "project_list"},
+                "source_confidence": 0.8,
+                "source_json": {"source": "structured_normalization"},
             }
         )
     return rows
@@ -131,7 +137,8 @@ def _parse_project_rows(projects: list[str], role: str | None, domain: str | Non
 def _parse_experience_rows(full_text: str, structured_data: dict) -> list[dict]:
     role = structured_data.get("role")
     domain = structured_data.get("domain")
-    months = _months_from_years(structured_data.get("experience"))
+    exp_years = structured_data.get("total_experience_years")
+    months = _months_from_years(exp_years)
     company = _extract_company(full_text)
     description = _clean_text((full_text or "")[:500])
 
@@ -142,68 +149,69 @@ def _parse_experience_rows(full_text: str, structured_data: dict) -> list[dict]:
         {
             "company_name": company,
             "job_title": role,
-            "normalized_job_title": _normalize_title(role),
+            "normalized_job_title": _normalize_title(structured_data.get("role_generic") or role),
             "start_date": None,
             "end_date": None,
             "is_current": True,
             "duration_months": months,
             "location": _extract_location(full_text)[0],
             "description": description,
-            "domain_tags": [domain] if domain else [],
-            "source_confidence": 0.6,
+            "domain_tags": [structured_data.get("domain_generic") or domain] if (domain or structured_data.get("domain_generic")) else [],
+            "source_confidence": 0.7,
             "source_json": {"source": "synthetic_from_profile"},
         }
     ]
 
 
-def _parse_certification_rows(full_text: str) -> list[dict]:
+def _parse_certification_rows(certifications: list[dict]) -> list[dict]:
     rows = []
-    for line in re.split(r"[\n;]+", full_text or ""):
-        if "certif" not in line.lower():
-            continue
-        cleaned = _clean_text(line)
-        if cleaned:
-            rows.append(
-                {
-                    "certification_name": cleaned[:255],
-                    "issuer": None,
-                    "issued_at": None,
-                    "expires_at": None,
-                    "source_confidence": 0.5,
-                    "source_json": {"source": "text_line"},
-                }
-            )
-    return rows[:10]
+    for item in certifications or []:
+        raw = item.get("raw")
+        generic = item.get("generic")
+        rows.append(
+            {
+                "certification_name": _clean_text(raw)[:255],
+                "issuer": None,
+                "issued_at": None,
+                "expires_at": None,
+                "source_confidence": 0.8,
+                "source_json": {"source": "structured_normalization", "generic": generic},
+            }
+        )
+    return rows
 
 
-def _skill_rows(skills: list[str], total_experience_months: int | None) -> list[dict]:
+def _skill_rows(skills: list[dict], total_experience_months: int | None) -> list[dict]:
     rows = []
-    for index, skill in enumerate(skills or []):
-        normalized = _normalize_title(skill)
+    for index, item in enumerate(skills or []):
+        raw = item.get("raw")
+        generic = item.get("generic")
+        normalized = generic or _normalize_title(raw)
         if not normalized:
             continue
         rows.append(
             {
-                "skill_name_raw": skill,
+                "skill_name_raw": raw,
                 "skill_name_normalized": normalized,
                 "skill_category": None,
                 "years_used_months": total_experience_months,
                 "last_used_year": date.today().year,
-                "proficiency_score": 0.8 if index < 5 else 0.6,
-                "is_primary": index < 5,
+                "proficiency_score": 0.9 if index < 5 else 0.7,
+                "is_primary": index < 10,
                 "source_confidence": 0.9,
-                "source_json": {"source": "structured_data"},
+                "source_json": {"source": "structured_normalization"},
             }
         )
     return rows
 
 
 def _build_summary(structured_data: dict, full_text: str) -> str:
+    skills_raw = [s.get("raw") for s in structured_data.get("skills", []) if isinstance(s, dict)]
     parts = [
         structured_data.get("candidate_name"),
         structured_data.get("role"),
         structured_data.get("domain"),
-        ", ".join(structured_data.get("skills", [])[:8]) if structured_data.get("skills") else None,
+        ", ".join(skills_raw[:10]) if skills_raw else None,
     ]
     summary = " | ".join(part for part in parts if part)
     if summary:
@@ -220,16 +228,20 @@ def normalize_resume_profile(
     confidence_score: float | None = None,
     source_kind: str = "raw_extraction",
 ) -> dict:
-    email = _extract_email(full_text)
-    phone = _extract_phone(full_text)
-    location_city, location_state, location_country = _extract_location(full_text)
+    email = structured_data.get("email") or _extract_email(full_text)
+    phone = structured_data.get("phone") or _extract_phone(full_text)
+    location = structured_data.get("location")
+    location_city, location_state, location_country = _extract_location(location or full_text)
     notice_period_days = _extract_notice_period_days(full_text)
     current_ctc = _extract_ctc(full_text, "current")
     expected_ctc = _extract_ctc(full_text, "expected")
-    total_experience_months = _months_from_years(structured_data.get("experience"))
+    
+    exp_years = structured_data.get("total_experience_years")
+    total_experience_months = _months_from_years(exp_years)
     summary = _build_summary(structured_data, full_text)
 
     education_rows = _parse_education_rows(structured_data.get("qualifications") or [])
+    
     profile_payload = {
         "candidate_name": structured_data.get("candidate_name"),
         "email": email,
@@ -239,7 +251,7 @@ def normalize_resume_profile(
         "location_country": location_country,
         "current_company": _extract_company(full_text),
         "current_role": structured_data.get("role"),
-        "normalized_title": _normalize_title(structured_data.get("role")),
+        "normalized_title": structured_data.get("role_generic") or _normalize_title(structured_data.get("role")),
         "total_experience_months": total_experience_months,
         "relevant_experience_months": total_experience_months,
         "notice_period_days": notice_period_days,
@@ -247,13 +259,9 @@ def normalize_resume_profile(
         "expected_ctc": expected_ctc,
         "highest_education": education_rows[0]["degree"] if education_rows else None,
         "summary": summary,
-        "domain_tags": [structured_data.get("domain")] if structured_data.get("domain") else [],
-        "confidence_score": confidence_score if confidence_score is not None else 0.75,
-        "raw_profile_json": {
-            "structured_data": structured_data,
-            "evidence_map": evidence_map,
-            "source_kind": source_kind,
-        },
+        "domain_tags": [structured_data.get("domain_generic") or structured_data.get("domain")] if (structured_data.get("domain_generic") or structured_data.get("domain")) else [],
+        "confidence_score": confidence_score if confidence_score is not None else 0.85,
+        "raw_profile_json": structured_data, # Store the exact requested JSON
     }
     profile = upsert_resume_profile(document_id, profile_payload)
     resume_profile_id = profile["id"]
@@ -264,9 +272,8 @@ def normalize_resume_profile(
         structured_data.get("projects") or [],
         structured_data.get("role"),
         structured_data.get("domain"),
-        structured_data.get("skills") or [],
     )
-    certification_rows = _parse_certification_rows(full_text)
+    certification_rows = _parse_certification_rows(structured_data.get("certifications") or [])
 
     replace_resume_skills(resume_profile_id, skill_rows)
     replace_resume_experiences(resume_profile_id, experience_rows)

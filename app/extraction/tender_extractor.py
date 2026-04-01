@@ -235,20 +235,31 @@ def extract_tender_requirements(text: str):
     heuristic = _heuristic_extract_tender(text)
     data = extract_tender_requirements_llm(text)
 
-    llm_skills = _unique(data.skills_required or [])
-    llm_preferred_skills = _unique(data.preferred_skills or [])
-    llm_qualifications = _unique(data.qualifications or [])
-    llm_responsibilities = _unique(data.responsibilities or [])
+    # Convert Pydantic model to dict for easier return
+    result = data.model_dump()
 
-    return {
-        "role": heuristic["role"] or data.role,
-        "domain": heuristic["domain"] or data.domain,
-        "skills_required": heuristic["skills_required"] or llm_skills,
-        "preferred_skills": heuristic["preferred_skills"] or llm_preferred_skills,
-        "experience_required": heuristic["experience_required"] or data.experience_required,
-        "qualifications": heuristic["qualifications"] or llm_qualifications,
-        "responsibilities": heuristic["responsibilities"] or llm_responsibilities,
-    }
+    # Heuristic fallback for simple fields if LLM missed them
+    if not result.get("role") and heuristic.get("role"):
+        result["role"] = heuristic["role"]
+    
+    if not result.get("domain") and heuristic.get("domain"):
+        result["domain"] = heuristic["domain"]
+
+    if result.get("experience_required") is None and heuristic.get("experience_required") is not None:
+        result["experience_required"] = heuristic["experience_required"]
+
+    # For structured list fields, we prefer LLM's raw/generic pairs.
+    # If LLM returned nothing but heuristic found something, we can semi-populate.
+    if not result.get("skills_required") and heuristic.get("skills_required"):
+        result["skills_required"] = [{"raw": s, "generic": s.lower().replace(" ", "_")} for s in heuristic["skills_required"]]
+
+    if not result.get("qualifications") and heuristic.get("qualifications"):
+        result["qualifications"] = [{"raw": q, "generic": q.lower().replace(" ", "_")} for q in heuristic["qualifications"]]
+
+    if not result.get("responsibilities") and heuristic.get("responsibilities"):
+        result["responsibilities"] = heuristic["responsibilities"]
+
+    return result
 
 
 def _review_is_missing(value: Any) -> bool:

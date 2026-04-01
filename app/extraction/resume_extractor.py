@@ -142,7 +142,7 @@ RESUME_REVIEW_THRESHOLD = 0.80
 RESUME_CRITICAL_FIELDS = {
     "candidate_name",
     "role",
-    "experience",
+    "total_experience_years",
     "skills",
 }
 
@@ -780,19 +780,31 @@ def extract_resume_data(text: str):
     heuristic = _heuristic_extract_resume(text)
     data = extract_resume_profile_llm(text)
 
-    llm_skills = _unique(data.skills or [])
-    llm_qualifications = _unique(data.qualifications or [])
-    llm_projects = _unique(data.projects or [])
+    # Convert Pydantic model to dict for easier merging/return
+    result = data.model_dump()
 
-    return {
-        "candidate_name": heuristic["candidate_name"] or data.candidate_name,
-        "role": heuristic["role"] or data.role,
-        "domain": heuristic["domain"] or data.domain,
-        "skills": heuristic["skills"] or llm_skills,
-        "experience": heuristic["experience"] or data.experience_years,
-        "qualifications": heuristic["qualifications"] or llm_qualifications,
-        "projects": heuristic["projects"] or llm_projects,
-    }
+    # Heuristic fallback for simple fields if LLM missed them
+    if not result.get("candidate_name") and heuristic.get("candidate_name"):
+        result["candidate_name"] = heuristic["candidate_name"]
+    
+    if result.get("total_experience_years") is None and heuristic.get("experience") is not None:
+        result["total_experience_years"] = heuristic["experience"]
+
+    if not result.get("role") and heuristic.get("role"):
+        result["role"] = heuristic["role"]
+
+    if not result.get("domain") and heuristic.get("domain"):
+        result["domain"] = heuristic["domain"]
+
+    # For complex list fields, we prefer LLM's structured raw/generic pairs.
+    # If LLM returned nothing but heuristic found something, we can semi-populate.
+    if not result.get("skills") and heuristic.get("skills"):
+        result["skills"] = [{"raw": s, "generic": s.lower().replace(" ", "_")} for s in heuristic["skills"]]
+
+    if not result.get("projects") and heuristic.get("projects"):
+        result["projects"] = [{"raw": p, "generic_tags": []} for p in heuristic["projects"]]
+
+    return result
 
 
 def extract_candidate_name(text: str) -> str | None:
@@ -848,7 +860,7 @@ def _resume_field_confidence(field_name: str, value: Any, evidence_value: Any) -
         heuristic = 0.84 if 1 <= len(str(value).split()) <= 8 else 0.62
         return _clamp_confidence((heuristic * 0.55) + (evidence_confidence * 0.45))
 
-    if field_name == "experience":
+    if field_name == "total_experience_years":
         try:
             years = int(value)
         except (TypeError, ValueError):

@@ -162,66 +162,53 @@ def _build_document_text(chunks, fallback_text="", limit=None, document_type="re
 
 
 def _score_candidate(tender_data, resume_data, *, tender_text: str = "", resume_text: str = ""):
-    required_skills = tender_data.get("skills_required", [])
-    preferred_skills = tender_data.get("preferred_skills", [])
-    required_experience = _to_int(tender_data.get("experience_required"))
+    # 1. Prepare Tender Requirements (Generic keys)
+    req_skills = [s.get("generic") for s in tender_data.get("skills_required", []) if s.get("generic")]
+    pref_skills = [s.get("generic") for s in tender_data.get("preferred_skills", []) if s.get("generic")]
+    req_qualifications = [q.get("generic") for q in tender_data.get("qualifications", []) if q.get("generic")]
+    req_experience = _to_int(tender_data.get("experience_required"))
+    tender_role_gen = tender_data.get("role_generic")
+    tender_domain_gen = tender_data.get("domain_generic")
 
-    candidate_skills = resume_data.get("skills", [])
-    candidate_experience = _to_int(resume_data.get("experience"))
-    candidate_role = resume_data.get("role")
-    candidate_domain = resume_data.get("domain")
+    # 2. Prepare Candidate Data (Generic keys)
+    cand_skills_gen = {s.get("generic") for s in resume_data.get("skills", []) if s.get("generic")}
+    cand_quals_gen = {q.get("generic") for q in resume_data.get("qualifications", []) if q.get("generic")}
+    cand_experience = _to_int(resume_data.get("total_experience_years"))
+    cand_role_gen = resume_data.get("role_generic")
+    cand_domain_gen = resume_data.get("domain_generic")
 
-    tender_role = tender_data.get("role")
-    tender_domain = tender_data.get("domain")
+    # 3. Deterministic Matching
+    matched_skills = [s for s in req_skills if s in cand_skills_gen]
+    missing_skills = [s for s in req_skills if s not in cand_skills_gen]
+    matched_preferred = [s for s in pref_skills if s in cand_skills_gen]
+    
+    # Fallback to phrase match for non-genericized items (if any remain)
+    if not req_skills and tender_data.get("skills_required"):
+        # Legacy fallback if generics didn't resolve
+        raw_req = [s.get("raw") or s for s in tender_data.get("skills_required", [])]
+        raw_cand = [s.get("raw") or s for s in resume_data.get("skills", [])]
+        matched_skills = [rs for rs in raw_req if any(_phrase_match(rs, cs) for cs in raw_cand)]
+        missing_skills = [rs for rs in raw_req if rs not in matched_skills]
 
-    matched_skills = sorted(
-        [
-            required_skill
-            for required_skill in required_skills
-            if any(_phrase_match(required_skill, candidate_skill) for candidate_skill in candidate_skills)
-        ]
-    )
-    missing_skills = sorted(
-        [
-            required_skill
-            for required_skill in required_skills
-            if required_skill not in matched_skills
-        ]
-    )
-    matched_preferred_skills = sorted(
-        [
-            preferred_skill
-            for preferred_skill in preferred_skills
-            if any(_phrase_match(preferred_skill, candidate_skill) for candidate_skill in candidate_skills)
-        ]
-    )
-
-    if len(required_skills) == 0:
-        skill_score = 0
-    else:
-        skill_score = (len(matched_skills) / len(required_skills)) * 70
-
-    preferred_score = 0
-    if preferred_skills:
-        preferred_score = (len(matched_preferred_skills) / len(preferred_skills)) * 10
-
-    role_match = _text_match(tender_role, candidate_role)
-    domain_match = _text_match(tender_domain, candidate_domain)
-
+    # 4. Scoring Logic
+    skill_score = (len(matched_skills) / len(req_skills)) * 70 if req_skills else 70
+    pref_score = (len(matched_preferred) / len(pref_skills)) * 10 if pref_skills else 0
+    
+    role_match = cand_role_gen == tender_role_gen if (cand_role_gen and tender_role_gen) else _text_match(tender_data.get("role"), resume_data.get("role"))
+    domain_match = cand_domain_gen == tender_domain_gen if (cand_domain_gen and tender_domain_gen) else _text_match(tender_data.get("domain"), resume_data.get("domain"))
+    
     role_score = 10 if role_match else 0
     domain_score = 10 if domain_match else 0
 
-    if required_experience is not None and candidate_experience is not None:
-        experience_match = candidate_experience >= required_experience
+    experience_match = False
+    experience_score = 0
+    if req_experience is not None and cand_experience is not None:
+        experience_match = cand_experience >= req_experience
         experience_score = 10 if experience_match else 0
-    else:
-        experience_match = False
-        experience_score = 0
 
-    final_score = round(
-        min(100, skill_score + preferred_score + role_score + domain_score + experience_score),
-        2
-    )
+    final_score = round(min(100, skill_score + pref_score + role_score + domain_score + experience_score), 2)
+    
+    # Cross-document analysis fallback (Agentic check)
     comparison_assessment = compare_tender_and_resume(
         tender_text=tender_text,
         resume_text=resume_text,
@@ -230,8 +217,6 @@ def _score_candidate(tender_data, resume_data, *, tender_text: str = "", resume_
     )
 
     if not comparison_assessment.get("is_valid_match", True):
-        role_match = False
-        experience_match = False
         final_score = 0.0
 
     verdict = _build_verdict(final_score, experience_match)
@@ -239,9 +224,9 @@ def _score_candidate(tender_data, resume_data, *, tender_text: str = "", resume_
     return {
         "matched_skills": matched_skills,
         "missing_skills": missing_skills,
-        "matched_preferred_skills": matched_preferred_skills,
-        "required_experience": required_experience,
-        "candidate_experience": candidate_experience,
+        "matched_preferred_skills": matched_preferred,
+        "required_experience": req_experience,
+        "candidate_experience": cand_experience,
         "experience_match": experience_match,
         "role_match": role_match,
         "domain_match": domain_match,

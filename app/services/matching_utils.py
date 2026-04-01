@@ -1,23 +1,11 @@
-from __future__ import annotations
 import re
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from app.database.connection import session_scope
+from app.models.db_models import QualificationMaster, QualificationAlias
 
-# Synonym Mappings for Qualifications
-QUALIFICATION_MAP = {
-    "btech": "engineering_bachelor",
-    "be": "engineering_bachelor",
-    "b.tech": "engineering_bachelor",
-    "b.e.": "engineering_bachelor",
-    "mtech": "engineering_master",
-    "me": "engineering_master",
-    "m.tech": "engineering_master",
-    "mba": "business_administration_master",
-    "bca": "computer_applications_bachelor",
-    "mca": "computer_applications_master",
-    "bsc": "science_bachelor",
-    "msc": "science_master",
-}
+# Qualification mappings are now handled via database tables:
+# qualification_master and qualification_alias.
 
 # Domain Mappings
 DOMAIN_MAP = {
@@ -35,28 +23,79 @@ DOMAIN_MAP = {
 def normalize_value(value: str) -> str:
     """Lowercase and clean special characters."""
     if not value: return ""
-    return re.sub(r"[^a-z0-9]+", "_", str(value).lower()).strip("_")
+    return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
 
 def map_synonyms(value: str, mapping: Dict[str, str]) -> str:
     """Map a value to its canonical form if exists."""
     normalized = normalize_value(value)
     # Check if the normalized value or its variations exist in mapping
-    clean_val = normalized.replace("_", "")
+    clean_val = normalized.replace(" ", "_")
     if clean_val in mapping:
         return mapping[clean_val]
     return normalized
+
+def resolve_qualification_generic_key(raw_value: str) -> Optional[str]:
+    """Resolves raw qualification to a generic_key using the database."""
+    normalized = normalize_value(raw_value)
+    if not normalized: return None
+    
+    with session_scope() as session:
+        # 1. Try direct match with generic_key
+        master = session.get(QualificationMaster, normalized.replace(" ", "_"))
+        if master: return master.generic_key
+        
+        # 2. Try match with aliases
+        alias = session.query(QualificationAlias).filter(
+            QualificationAlias.alias_value == normalized
+        ).first()
+        if alias: return alias.generic_key
+        
+    return None
+
+def get_aliases_for_generic_key(generic_key: str) -> List[str]:
+    """Fetches all aliases for a given generic_key."""
+    with session_scope() as session:
+        aliases = session.query(QualificationAlias.alias_value).filter(
+            QualificationAlias.generic_key == generic_key
+        ).all()
+        return [a[0] for a in aliases]
 
 def extract_structured_requirements(tender_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalizes raw tender extraction into structured requirements.
     """
+    qualifications_raw = tender_data.get("qualifications", [])
+    resolved_quals = []
+    for item in qualifications_raw:
+        # qualification is now a dict {"raw": "...", "generic": "..."}
+        raw = item.get("raw") if isinstance(item, dict) else item
+        generic = item.get("generic") if isinstance(item, dict) else None
+        
+        gkey = generic or resolve_qualification_generic_key(raw)
+        if gkey:
+            resolved_quals.append({
+                "generic_key": gkey,
+                "aliases": get_aliases_for_generic_key(gkey)
+            })
+        else:
+            resolved_quals.append({
+                "generic_key": None,
+                "aliases": [normalize_value(raw)]
+            })
+
+    # Flatten skills for matching plan
+    req_skills_raw = [s.get("generic") or normalize_value(s.get("raw")).replace(" ", "_") 
+                      for s in tender_data.get("skills_required", []) if isinstance(s, dict)]
+    pref_skills_raw = [s.get("generic") or normalize_value(s.get("raw")).replace(" ", "_") 
+                       for s in tender_data.get("preferred_skills", []) if isinstance(s, dict)]
+
     reqs = {
-        "role": normalize_value(tender_data.get("role", "")),
-        "required_skills": [normalize_value(s) for s in tender_data.get("skills_required", [])],
-        "preferred_skills": [normalize_value(s) for s in tender_data.get("preferred_skills", [])],
+        "role": tender_data.get("role_generic") or normalize_value(tender_data.get("role", "")),
+        "required_skills": req_skills_raw,
+        "preferred_skills": pref_skills_raw,
         "min_experience": tender_data.get("experience_required", 0),
-        "domain": map_synonyms(tender_data.get("domain", ""), DOMAIN_MAP),
-        "qualifications": [map_synonyms(q, QUALIFICATION_MAP) for q in tender_data.get("qualifications", [])],
+        "domain": tender_data.get("domain_generic") or map_synonyms(tender_data.get("domain", ""), DOMAIN_MAP),
+        "qualifications": resolved_quals,
     }
     
     # Ensure min_experience is an integer
@@ -75,7 +114,7 @@ def generate_matching_sql(reqs: Dict[str, Any]) -> str:
     
     # Required Experience
     if reqs["min_experience"] > 0:
-        where_clauses.append(f"resumes.experience_years >= {reqs['min_experience']}")
+        where_clauses.append(f"resumes.total_experience_years >= {reqs['min_experience']}")
         
     # Domain matching (Flexible)
     if reqs["domain"]:
@@ -91,12 +130,18 @@ def generate_matching_sql(reqs: Dict[str, Any]) -> str:
             f"EXISTS (SELECT 1 FROM resume_skills rs WHERE rs.resume_id = resumes.id AND rs.skill_name = '{skill}')"
         )
         
-    # Qualifications (Using IN if multiple)
-    if reqs["qualifications"]:
-        quals_str = ", ".join([f"'{q}'" for q in reqs["qualifications"]])
-        where_clauses.append(
-            f"EXISTS (SELECT 1 FROM resume_qualifications rq WHERE rq.resume_id = resumes.id AND rq.qualification_group IN ({quals_str}))"
-        )
+    # Qualifications (Filtering using generic_key or alias array)
+    for qual in reqs["qualifications"]:
+        if qual["generic_key"]:
+            where_clauses.append(
+                f"EXISTS (SELECT 1 FROM resume_education re WHERE re.resume_profile_id = resumes.id AND re.generic_key = '{qual['generic_key']}')"
+            )
+        else:
+            # Fallback to aliases if no generic_key resolved
+            aliases_str = ", ".join([f"'{a}'" for a in qual["aliases"]])
+            where_clauses.append(
+                f"EXISTS (SELECT 1 FROM resume_education re WHERE re.resume_profile_id = resumes.id AND re.degree IN ({aliases_str}))"
+            )
 
     query = "SELECT resumes.* FROM resumes"
     if where_clauses:

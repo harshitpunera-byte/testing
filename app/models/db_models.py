@@ -257,6 +257,7 @@ class ResumeEducation(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     resume_profile_id: Mapped[int] = mapped_column(ForeignKey("resume_profiles.id", ondelete="CASCADE"), index=True, nullable=False)
     degree: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    generic_key: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     specialization: Mapped[str | None] = mapped_column(String(255), nullable=True)
     institution: Mapped[str | None] = mapped_column(String(255), nullable=True)
     start_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -425,3 +426,25 @@ class ResumeSearchIndex(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     resume_profile: Mapped[ResumeProfile] = relationship("ResumeProfile", back_populates="search_index")
+class QualificationMaster(Base):
+    __tablename__ = "qualification_master"
+    
+    generic_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    aliases: Mapped[list["QualificationAlias"]] = relationship(
+        "QualificationAlias", back_populates="master", cascade="all, delete-orphan"
+    )
+
+class QualificationAlias(Base):
+    __tablename__ = "qualification_alias"
+    __table_args__ = (
+        UniqueConstraint("generic_key", "alias_value", name="uq_qualification_alias_key_val"),
+    )
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    generic_key: Mapped[str] = mapped_column(ForeignKey("qualification_master.generic_key", ondelete="CASCADE"), index=True, nullable=False)
+    alias_value: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    
+    master: Mapped[QualificationMaster] = relationship("QualificationMaster", back_populates="aliases")
