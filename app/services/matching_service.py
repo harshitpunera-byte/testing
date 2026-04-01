@@ -15,7 +15,7 @@ from app.services.document_intent import compare_tender_and_resume
 from app.services.evidence_service import build_evidence_map
 from app.services.review_service import document_uses_unreviewed_data, preferred_structured_data
 from app.services.resume_name_service import repair_resume_structured_data
-from app.services.search_service import search_resumes
+from app.services.search_service import search_resumes, get_structured_match_plan
 
 
 matching_graph = build_matching_graph()
@@ -566,9 +566,14 @@ def match_resumes_with_uploaded_tender(
         }
     )
 
+    match_plan = get_structured_match_plan(tender_data)
+
     return {
         "message": "Matching completed using uploaded tender.",
         "tender_requirements": tender_data,
+        "structured_matching_plan": match_plan["structured_requirements"],
+        "matching_sql_query": match_plan["sql_query"],
+        "matching_explanation": match_plan["short_explanation"],
         "tender_evidence_map": tender_evidence_map,
         "tender_review_status": (primary_tender_document or {}).get("review_status"),
         "tender_canonical_data_ready": (primary_tender_document or {}).get("canonical_data_ready", False),

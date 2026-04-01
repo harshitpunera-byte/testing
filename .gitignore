@@ -9,3 +9,7 @@ vector_store/
 
 tender-ui/node_modules/
 tender-ui/dist/
+
+# Large binaries
+pg18.zip
+pg18_extracted/

@@ -15,6 +15,12 @@ from app.models.db_models import (
 )
 from app.rag.vector_store import search_index_hybrid, search_resume_profiles_semantic
 from app.services.document_repository import get_resume_profile_with_relations
+from app.services.matching_utils import (
+    extract_structured_requirements,
+    generate_matching_sql,
+    normalize_value,
+)
+
 
 
 SEARCH_KEYWORDS = {
@@ -176,6 +182,27 @@ def _candidate_evidence(document_id: int, skills: list[str], limit: int = 3) -> 
         if len(results) >= limit:
             break
     return results
+
+
+def get_structured_match_plan(tender_data: dict) -> dict:
+    """
+    Converts raw tender extraction into a structured matching plan with SQL.
+    """
+    structured_reqs = extract_structured_requirements(tender_data)
+    sql_query = generate_matching_sql(structured_reqs)
+    
+    explanation = (
+        f"Searching for roles matching '{structured_reqs['role']}' "
+        f"with {structured_reqs['min_experience']}+ years experience. "
+        f"Mandatory skills: {', '.join(structured_reqs['required_skills'])}. "
+        f"Filtering by domain: {structured_reqs['domain']}."
+    )
+    
+    return {
+        "structured_requirements": structured_reqs,
+        "sql_query": sql_query,
+        "short_explanation": explanation
+    }
 
 
 def search_resumes(query: str, page: int = 1, page_size: int = 20) -> dict:
