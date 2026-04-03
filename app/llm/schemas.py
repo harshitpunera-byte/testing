@@ -3,20 +3,6 @@ from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 
 
-class TenderRequirements(BaseModel):
-    role: Optional[str] = None
-    role_generic: Optional[str] = None
-    domain: Optional[str] = None
-    domain_generic: Optional[str] = None
-    summary: Optional[str] = None
-    skills_required: List[RawGenericItem] = Field(default_factory=list)
-    preferred_skills: List[RawGenericItem] = Field(default_factory=list)
-    experience_required: Optional[int] = None
-    qualifications: List[RawGenericItem] = Field(default_factory=list)
-    responsibilities: List[str] = Field(default_factory=list)
-    summary_for_matching: Optional[MatchingSummary] = None
-
-
 class RawGenericItem(BaseModel):
     raw: str = ""
     generic: str = ""
@@ -38,6 +24,20 @@ class MustStoreGenericValues(BaseModel):
 
 class MatchingSummary(BaseModel):
     must_store_generic_values: MustStoreGenericValues
+
+
+class TenderRequirements(BaseModel):
+    role: Optional[str] = None
+    role_generic: Optional[str] = None
+    domain: Optional[str] = None
+    domain_generic: Optional[str] = None
+    summary: Optional[str] = None
+    skills_required: List[RawGenericItem] = Field(default_factory=list)
+    preferred_skills: List[RawGenericItem] = Field(default_factory=list)
+    experience_required: Optional[int] = None
+    qualifications: List[RawGenericItem] = Field(default_factory=list)
+    responsibilities: List[str] = Field(default_factory=list)
+    summary_for_matching: Optional[MatchingSummary] = None
 
 
 class ResumeProfile(BaseModel):

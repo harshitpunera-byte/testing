@@ -68,6 +68,17 @@ RESUME_HINTS = {
     "birth",
 }
 
+COLLECTION_HINTS = {
+    "how many",
+    "total",
+    "all candidates",
+    "all resumes",
+    "list all",
+    "show all",
+    "count",
+    "many",
+}
+
 
 def classify_query_intent(query: str, has_tender: bool, has_resume: bool) -> dict:
     lowered = " ".join(query.lower().split())
@@ -115,8 +126,8 @@ def build_answer_prompt(query: str, scope_label: str, structured_contexts: list[
 
     chunk_block = "\n\n".join(rendered_chunks)
 
-    return f"""
-YOU ARE A DATA EXTRACTION SPECIALIST. 
+    prompt = f"""
+YOU ARE A DATA EXTRACTION SPECIALIST AND AGGREGATOR. 
 I am providing you with context from TWO DIFFERENT DATA SOURCES (Tenders and Resumes).
 Your job is to answer the user's question without mixing data between these two documents.
 
@@ -140,6 +151,34 @@ MISSION RULES:
 6. Explicitly mention which source label provided which part of the answer.
 7. If the context has a DOB, you MUST say it.
 8. If a snippet contains a direct field/value pair or glossary-style mapping (for example, "Date of Birth: 1st July 1970" or "LOA As defined in Clause 3.8.4"), copy that exact value instead of inferring.
+"""
+    return prompt.strip()
+
+
+def build_collection_summary_prompt(query: str, total_count: int, matched_candidates: list[dict], clusters: dict | None = None) -> str:
+    candidates_text = "\n".join(
+        f"- {c.get('candidate_name', 'Unknown')} (ID: {c.get('resume_profile_id')}, Title: {c.get('normalized_title', 'Unknown')}, Exp: {round((c.get('total_experience_months') or 0)/12, 1)} yrs)"
+        for c in matched_candidates[:15]
+    )
+    
+    return f"""
+YOU ARE A RECRUITMENT ANALYST.
+The user is asking a broad question about the entire candidate database.
+I have performed a structured search and found the following:
+
+TOTAL MATCHES FOUND: {total_count}
+
+REPRESENTATIVE CANDIDATES:
+{candidates_text}
+
+USER QUESTION: {query}
+
+MISSION:
+1. State clearly how many candidates matched the criteria based on the structured search.
+2. Provide a summary of the top candidates found.
+3. If the total count is high (e.g., 1000), mention that you have analyzed the entire database.
+4. Keep the tone professional and helpful.
+5. If some candidates have specific highlights (like high experience or relevant titles), mention them.
 """.strip()
 
 

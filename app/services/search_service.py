@@ -23,6 +23,12 @@ from app.services.matching_utils import (
 
 
 
+from app.services.matching_utils import (
+    normalize_value,
+    resolve_qualification_generic_key,
+)
+
+
 SEARCH_KEYWORDS = {
     "find",
     "candidate",
@@ -115,13 +121,49 @@ def _extract_max_notice_period(query: str) -> int | None:
     return None
 
 
+def _extract_education(query: str) -> str | None:
+    lowered = " ".join(query.lower().split())
+    # Detect generic graduation
+    if any(term in lowered for term in ["graduate", "graduation", "degree"]):
+        return "degree_graduation"
+
+    # Try mapping using database-backed matching_utils
+    # We strip common filler words or phrases
+    cleaned_query = re.sub(r"\b(how|many|are|show|me|list|all|candidates|who|have|done|did|the|a|an)\b", "", lowered).strip()
+    
+    # Try the whole query first, then parts
+    gkey = resolve_qualification_generic_key(cleaned_query)
+    if gkey:
+        return gkey
+
+    # Check for common abbreviations if database lookup failed for whole phrase
+    degrees = {
+        "btech": "degree_b_tech",
+        "b.tech": "degree_b_tech",
+        "mtech": "degree_m_tech",
+        "m.tech": "degree_m_tech",
+        "bca": "degree_bca",
+        "mca": "degree_mca",
+        "mba": "degree_mba",
+        "bba": "degree_bba",
+        "bcom": "degree_b_com",
+        "bsc": "degree_b_sc",
+        "msc": "degree_m_sc",
+        "barch": "degree_b_arch",
+    }
+    for key, val in degrees.items():
+        if key in lowered:
+            return val
+    return None
+
+
 def _classify_query_mode(query: str, parsed: dict) -> str:
     lowered = query.lower()
     if any(term in lowered for term in ["similar", "worked on", "related to", "experience with"]) and not parsed["skills"]:
         return "semantic"
     if any(term in lowered for term in ["rank", "top", "best", "shortlist"]):
         return "structured_rank"
-    if parsed["skills"] or parsed["min_experience_years"] or parsed["location"] or parsed["max_notice_period_days"]:
+    if parsed["skills"] or parsed["min_experience_years"] or parsed["location"] or parsed["max_notice_period_days"] or parsed["education"]:
         return "structured_filter"
     return "hybrid"
 
@@ -133,6 +175,7 @@ def parse_search_query(query: str) -> dict:
         "location": _extract_location(query),
         "min_experience_years": _extract_min_experience(query),
         "max_notice_period_days": _extract_max_notice_period(query),
+        "education": _extract_education(query),
     }
     parsed["mode"] = _classify_query_mode(query, parsed)
     return parsed
@@ -231,6 +274,25 @@ def search_resumes(query: str, page: int = 1, page_size: int = 20) -> dict:
                     ResumeProfile.notice_period_days <= parsed["max_notice_period_days"],
                 )
             )
+        if parsed["education"]:
+            # Check for generic graduation or specific degree
+            if parsed["education"] == "degree_graduation":
+                statement = statement.where(
+                    or_(
+                        ResumeProfile.highest_education.isnot(None),
+                        ResumeProfile.highest_education != ""
+                    )
+                )
+            else:
+                # We check if generic_key matches or title contains the short version
+                match_val = parsed["education"].replace("degree_", "").replace("_", " ")
+                statement = statement.where(
+                    or_(
+                        ResumeProfile.highest_education.ilike(f"%{match_val}%"),
+                        ResumeProfile.highest_education.ilike(f"%{match_val.replace(' ', '')}%")
+                    )
+                )
+
         if parsed["skills"]:
             skill_subquery = (
                 select(ResumeSkill.resume_profile_id)

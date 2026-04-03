@@ -6,9 +6,11 @@ from app.agents.query_agent import (
     RESUME_HINTS,
     TENDER_HINTS,
     build_answer_prompt,
+    build_collection_summary_prompt,
     build_exact_fact_summary_prompt,
     build_fallback_answer,
     classify_query_intent,
+    COLLECTION_HINTS,
 )
 from app.llm.provider import llm_text_answer
 from app.rag.loader import load_pdf_pages
@@ -36,6 +38,7 @@ from app.services.review_service import (
     list_open_review_tasks_for_documents,
     preferred_structured_data,
 )
+from app.services.search_service import search_resumes
 
 
 COLLECTION_QUERY_HINTS = {
@@ -1420,6 +1423,33 @@ def _answer_qa(
         max_chunks=24,
         chunk_window=0,
     )
+
+    # Collection Query Special Handling: Use structured search for aggregate questions
+    is_collection_query = (
+        scope == "resume" 
+        and any(hint in query.lower() for hint in COLLECTION_HINTS)
+    )
+    if is_collection_query:
+        search_result = search_resumes(query, page=1, page_size=20)
+        total_matches = search_result.get("total", 0)
+        if total_matches > 0:
+            prompt = build_collection_summary_prompt(
+                query=query, 
+                total_count=total_matches, 
+                matched_candidates=search_result.get("results", [])
+            )
+            answer_text = llm_text_answer(prompt).strip()
+            if answer_text:
+                return {
+                    "mode": "qa",
+                    "query_scope": scope,
+                    "message": f"Analyzed {total_matches} candidates using structured search.",
+                    "answer_text": answer_text,
+                    "sources": [],
+                    "matches": search_result.get("results", [])[:10],
+                    "reasoning_summary": f"Found {total_matches} candidates matching criteria.",
+                    **_build_human_intervention_state(active_documents_by_type, scope_documents),
+                }
 
     if not chunks:
         return {
