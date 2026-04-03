@@ -1442,6 +1442,8 @@ def _answer_qa(
     if is_collection_query:
         search_result = search_resumes(query, page=1, page_size=20)
         total_matches = search_result.get("total", 0)
+        bg_search_sql = search_result.get("generated_sql")
+        
         if total_matches > 0:
             prompt = build_collection_summary_prompt(
                 query=query, 
@@ -1461,6 +1463,18 @@ def _answer_qa(
                     "generated_sql": search_result.get("generated_sql"),
                     **_build_human_intervention_state(active_documents_by_type, scope_documents),
                 }
+        else:
+            return {
+                "mode": "qa",
+                "query_scope": scope,
+                "message": "0 candidates found matching your structured criteria.",
+                "answer_text": "I actively searched the database using a strict SQL translation of your query, but zero candidates matched the parameters. The generated SQL is available below.",
+                "sources": [],
+                "matches": [],
+                "reasoning_summary": "Zero candidates matched.",
+                "generated_sql": search_result.get("generated_sql"),
+                **_build_human_intervention_state(active_documents_by_type, scope_documents),
+            }
 
     if not chunks:
         return {
@@ -1471,6 +1485,7 @@ def _answer_qa(
             "sources": [],
             "matches": [],
             "reasoning_summary": "",
+            "generated_sql": bg_search_sql,
             **_build_human_intervention_state(active_documents_by_type, scope_documents),
         }
 

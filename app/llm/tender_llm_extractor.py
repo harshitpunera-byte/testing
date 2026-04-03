@@ -6,37 +6,88 @@ from app.llm.schemas import TenderRequirements
 
 @lru_cache(maxsize=128)
 def extract_tender_requirements_llm(text: str) -> TenderRequirements:
+    safe_text = (text or "")[:200000]
+
     prompt = f"""
-You are a production-grade Tender Analyst for a Hiring-Resume Matching System.
+### SYSTEM PERSONA
+You are a production-grade Tender Analysis and Normalization Engine for a Tender–Resume Matching System.
 
-Goal:
-Standardize hiring or project requirements from tender text into a deterministic JSON format to enable SQL matching.
+### GOAL
+Convert tender text into structured JSON and normalize noisy surface forms into stable canonical values so the output can be matched deterministically against candidate resumes using SQL.
 
-Tasks:
+### PRIMARY INSTRUCTIONS
+1. Extract only information clearly supported by the tender text.
+2. Do not hallucinate, guess, or invent facts.
+3. Preserve raw extracted phrases as faithfully as possible.
+4. Normalize values into canonical generic identifiers wherever required.
+5. Return ONLY valid JSON matching the provided schema.
+6. Do not return markdown, explanation, comments, or extra keys.
 
-1. Extract core requirements: role, domain, summary, skills_required, preferred_skills, experience_required, qualifications, and responsibilities.
+### TARGET FIELDS
+Extract these fields where present:
+- role
+- domain
+- summary
+- skills_required
+- preferred_skills
+- experience_required
+- qualifications
+- responsibilities
+- role_generic
+- domain_generic
+- summary_for_matching (with must_store_generic_values)
 
-2. Generate an "executive summary" (2-3 sentences) of the overall requirement.
+### OUTPUT RULES
+- Scalar missing values -> null
+- Missing list fields -> []
+- Unclear generic value -> "unknown"
+- Each generic normalized value must be a SINGLE canonical string
+- Deduplicate semantic duplicates across spelling, abbreviation, and phrasing variants
+- Preserve schema shape exactly
 
-3. Provide "summary_for_matching" containing "must_store_generic_values" representing the standardized IDs for matching.
+### QUALIFICATION NORMALIZATION RULES
+Normalize equivalent degree names to one canonical value.
+Examples:
+- "b.tech", "btech", "bachelor of technology" -> "btech"
+- "m.tech", "master of technology" -> "mtech"
+- "b.sc", "bachelor of science" -> "bsc"
+- "m.sc", "master of science", "masters" -> "msc"
+- "bca", "bachelor of computer applications" -> "bca"
+- "mca", "master of computer applications" -> "mca"
+- "mba", "master of business administration" -> "mba"
+- "b.e", "be", "bachelor of engineering" -> "be"
+- "diploma in civil engineering" -> "diploma"
+- "phd", "doctor of philosophy" -> "phd"
 
-4. For role, domain, skills, and qualifications, you MUST generate both "raw" (original phrase) and "generic" (normalized) values.
+### SKILL NORMALIZATION RULES
+Map equivalent skill expressions to one stable identifier.
+Examples:
+- "python programming", "python developer", "python" -> "python"
+- "postgres", "postgresql" -> "postgresql"
+- "js", "javascript" -> "javascript"
+- "node", "nodejs", "node.js" -> "nodejs"
+- "react", "reactjs", "react.js" -> "reactjs"
 
-5. Generic Normalization Rules:
-- Lowercase, underscore_separated, no punctuation, no duplicates.
-- Map surface forms to a single canonical concept.
-- Examples: 
-  "M.Tech in Structures", "Master of Structural Engineering" -> "structural_engineering_master"
-  "Python Developer", "Coding in Python" -> "python_programming"
-  "HOD Roads", "Project Director highway" -> "highway_project_director"
-  "Road projects", "Expressways", "National Highways" -> "road_transport_infrastructure"
+### ROLE NORMALIZATION RULES
+Normalize role titles conservatively.
+Examples:
+- "Python Developer" -> "python_developer"
+- "Backend Python Developer" -> "python_backend_developer"
+- "Civil Site Engineer" -> "civil_site_engineer"
+- "Project Manager" -> "project_manager"
 
-6. Experience: Convert "10+ years", "Minimum 10 years" to integer 10.
+### DOMAIN NORMALIZATION RULES
+Normalize industry/domain labels conservatively.
+Examples:
+- "Highway", "Expressway", "Road Infrastructure" -> "road_transport_infrastructure"
+- "Banking", "Financial Services" -> "banking_financial_services"
+- "Healthcare", "Medical" -> "healthcare"
 
-Tender text (truncated if necessary):
-{text[:200000]}
+### EXPERIENCE RULES
+- `experience_required`: Convert phrases like "Min 10 years", "10+ years" into integer `10`.
 
-Return only valid JSON matching the provided schema.
+### TENDER TEXT
+{safe_text}
 """
 
     raw_json = llm_json_extract(

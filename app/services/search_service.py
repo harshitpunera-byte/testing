@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from sqlalchemy import Float, and_, case, cast, desc, func, literal, or_, select
+from sqlalchemy import Float, and_, case, cast, desc, func, literal, or_, select, text
 
 from app.database.connection import session_scope
 from app.models.db_models import (
@@ -20,6 +20,7 @@ from app.services.matching_utils import (
     generate_matching_sql,
     normalize_value,
 )
+from app.llm.query_to_sql import generate_sql_for_query
 
 
 
@@ -276,77 +277,21 @@ def search_resumes(query: str, page: int = 1, page_size: int = 20) -> dict:
             .where(Document.processing_status == "stored", Document.document_type == "resume")
         )
         
-        # We also need to be able to filter by deep education records
-        from app.models.db_models import ResumeEducation
-        
-        # Capture the raw SQL later
-        sql_parts = []
-
-        if parsed["title"]:
-            statement = statement.where(ResumeProfile.normalized_title.ilike(f"%{parsed['title']}%"))
-        if parsed["location"]:
-            statement = statement.where(ResumeProfile.location_city.ilike(f"%{parsed['location']}%"))
-        if parsed["min_experience_years"] is not None:
-            statement = statement.where(ResumeProfile.total_experience_months >= parsed["min_experience_years"] * 12)
-        if parsed["max_notice_period_days"] is not None:
-            statement = statement.where(
-                or_(
-                    ResumeProfile.notice_period_days.is_(None),
-                    ResumeProfile.notice_period_days <= parsed["max_notice_period_days"],
-                )
-            )
-        if parsed["education"]:
-            edu_info = parsed["education"]
-            degree_name = edu_info["degree_name"]
-            is_negated = edu_info["is_negated"]
-            
-            # Normalize name for search (remove dots for broader matching)
-            clean_name = degree_name.replace(".", "").replace(" ", "")
-            
-            # Subquery to find candidates with the specific degree
-            education_subquery = (
-                select(ResumeEducation.resume_profile_id)
-                .where(
-                    or_(
-                        func.replace(func.replace(ResumeEducation.degree, ".", ""), " ", "").ilike(f"%{clean_name}%"),
-                        ResumeEducation.generic_key.ilike(f"%{degree_name.replace(' ', '_')}%")
-                    )
-                )
-            )
-            
-            if is_negated:
-                # Exclude these candidates
-                statement = statement.where(
-                    and_(
-                        func.replace(func.replace(ResumeProfile.highest_education, ".", ""), " ", "").not_ilike(f"%{clean_name}%"),
-                        ResumeProfile.id.not_in(education_subquery)
-                    )
-                )
-            else:
-                # Include these candidates
-                statement = statement.where(
-                    or_(
-                        func.replace(func.replace(ResumeProfile.highest_education, ".", ""), " ", "").ilike(f"%{clean_name}%"),
-                        ResumeProfile.id.in_(education_subquery)
-                    )
-                )
-
-        if parsed["skills"]:
-            skill_subquery = (
-                select(ResumeSkill.resume_profile_id)
-                .where(
-                    ResumeSkill.skill_name_normalized.in_(parsed["skills"])
-                )
-                .group_by(ResumeSkill.resume_profile_id)
-                .having(func.count(ResumeSkill.id) >= len(parsed["skills"]))
-            )
-            statement = statement.where(ResumeProfile.id.in_(skill_subquery))
-
-        # Capture SQL for debugging/UI
         try:
-            generated_sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
-        except Exception:
-            generated_sql = "Structured SQL generation in progress..."
+            # === LLM SQL GENERATION ===
+            generated_sql = generate_sql_for_query(query)
+            
+            # Execute LLM generated SQL to fetch valid candidate IDs
+            matching_ids = [row[0] for row in db.execute(text(generated_sql)).fetchall()]
+            
+            if matching_ids:
+                statement = statement.where(ResumeProfile.id.in_(matching_ids))
+            else:
+                statement = statement.where(ResumeProfile.id == -1)
+
+        except Exception as e:
+            generated_sql = f"LLM SQL generation failed: {e}\nFallback used."
+            print(f"SQL Error: {e}")
 
         total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
         rows = db.execute(
