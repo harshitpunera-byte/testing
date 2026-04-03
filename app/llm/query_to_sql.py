@@ -96,7 +96,8 @@ CRITICAL MAPPING:
 The database uses strict canonical abbreviations, NOT full words or varying combinations.
 You MUST map semantic requests to these exact strings:
 - "btech": Bachelor of Technology / B.Tech / B.E / B-Tech
-- "mtech": Master of Technology / M.Tech / M.E
+- "mtech": Master of Technology / M.Tech
+- "me": Master of Engineering / M.E
 - "bsc": Bachelor of Science / B.Sc / BS
 - "msc": Master of Science / M.Sc / MS / Masters
 - "bca": Bachelor of Computer Applications
@@ -111,7 +112,7 @@ EXISTS (
     SELECT 1
     FROM resume_education
     WHERE resume_education.resume_profile_id = resume_profiles.id
-      AND resume_education.generic_key IN ('mtech', 'msc', 'mca', 'mba')
+      AND resume_education.generic_key IN ('mtech', 'me', 'msc', 'mca', 'mba')
 )
 
 If the user asks for "bachelors", use:

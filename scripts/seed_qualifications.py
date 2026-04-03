@@ -11,13 +11,14 @@ def seed_qualifications():
     print("Starting Seeding Qualification Master and Alises...")
     
     data = {
-        "engineering_bachelor": ["btech", "be", "b tech", "b e", "bachelor of technology", "bachelor of engineering"],
-        "engineering_master": ["mtech", "me", "m tech", "m e", "master of technology", "master of engineering"],
-        "business_administration_master": ["mba", "master of business administration"],
-        "computer_applications_bachelor": ["bca", "bachelor of computer applications"],
-        "computer_applications_master": ["mca", "master of computer applications"],
-        "science_bachelor": ["bsc", "b sc", "bachelor of science"],
-        "science_master": ["msc", "m sc", "master of science"],
+        "btech": ["btech", "be", "b tech", "b e", "bachelor of technology", "bachelor of engineering"],
+        "mtech": ["mtech", "m tech", "master of technology"],
+        "me": ["me", "m e", "master of engineering"],
+        "mba": ["mba", "master of business administration"],
+        "bca": ["bca", "bachelor of computer applications"],
+        "mca": ["mca", "master of computer applications"],
+        "bsc": ["bsc", "b sc", "bachelor of science"],
+        "msc": ["msc", "m sc", "master of science"],
     }
     
     with session_scope() as session:

@@ -6,6 +6,8 @@ export default function ResumeUpload({ onUploadComplete }) {
 
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0); // overall percentage
+  const [currentFileIndex, setCurrentFileIndex] = useState(0); // which file is being processed
   const [result, setResult] = useState(null);
 
   const collectUploadedRecords = (payload) => {
@@ -60,6 +62,8 @@ export default function ResumeUpload({ onUploadComplete }) {
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+    setProgress(0);
+    setCurrentFileIndex(0);
     onUploadComplete?.([], []);
   };
 
@@ -68,46 +72,62 @@ export default function ResumeUpload({ onUploadComplete }) {
       alert("Please select at least one resume PDF");
       return;
     }
-
+  
     try {
       setLoading(true);
-
-      const formData = new FormData();
-
-      if (files.length === 1) {
-        formData.append("file", files[0]);
-
-        const res = await API.post("/resumes/upload", formData, {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
-        });
-
-        setResult(res.data);
-        const uploadedIds = res.data?.document_id ? [res.data.document_id] : [];
-        onUploadComplete?.(uploadedIds, collectUploadedRecords(res.data));
-      } else {
-        files.forEach((file) => {
-          formData.append("files", file);
-        });
-
-        const res = await API.post("/resumes/upload-multiple", formData, {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
-        });
-
-        setResult(res.data);
-        const uploadedIds = (res.data?.processed || [])
-          .map((item) => item.document_id)
-          .filter((value) => value !== null && value !== undefined);
-        onUploadComplete?.(uploadedIds, collectUploadedRecords(res.data));
+      setResult(null);
+      setProgress(0);
+      setCurrentFileIndex(0);
+  
+      const allProcessed = [];
+      const allFailed = [];
+      const allDocumentIds = [];
+  
+      for (let i = 0; i < files.length; i++) {
+        setCurrentFileIndex(i + 1);
+        const file = files[i];
+        const formData = new FormData();
+        formData.append("file", file);
+  
+        try {
+          // Individual file upload with its own progress handling
+          // We don't bother showing byte progress for each file if there are many,
+          // rather we show that the file is "uploading/processing" as a state.
+          const res = await API.post("/resumes/upload", formData, {
+            headers: {
+              "Content-Type": "multipart/form-data",
+            },
+          });
+  
+          allProcessed.push({ ...res.data, filename: file.name, status: "stored" });
+          if (res.data?.document_id) allDocumentIds.push(res.data.document_id);
+        } catch (err) {
+          allFailed.push({ filename: file.name, error: err.response?.data?.message || err.message });
+        }
+  
+        // Calculate and update overall progress based on file count
+        const overallProgress = Math.round(((i + 1) * 100) / files.length);
+        setProgress(overallProgress);
       }
+  
+      const combinedResult = {
+        message: "Bulk upload finished",
+        total_files: files.length,
+        processed_files: allProcessed.length,
+        failed_files: allFailed.length,
+        processed: allProcessed,
+        failed: allFailed,
+      };
+  
+      setResult(combinedResult);
+      onUploadComplete?.(allDocumentIds, allProcessed);
     } catch (error) {
       console.error(error);
-      alert("Resume upload failed");
+      alert("Resume upload process failed unexpectedly");
     } finally {
       setLoading(false);
+      // Wait a moment then reset the index, but keep progress at 100 for visual finish
+      setTimeout(() => setProgress(0), 2000);
     }
   };
 
@@ -171,13 +191,24 @@ export default function ResumeUpload({ onUploadComplete }) {
       <button
         onClick={uploadResumes}
         disabled={loading || !files.length}
-        className="w-full rounded-lg bg-blue-600 px-4 py-3 text-white hover:bg-blue-700 disabled:opacity-50"
+        className="w-full relative overflow-hidden rounded-lg bg-blue-600 px-4 py-3 text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {loading
-          ? "Uploading..."
-          : files.length > 1
-          ? "Upload Resumes"
-          : "Upload Resume"}
+        {loading && (
+          <div 
+            className="absolute left-0 top-0 h-full bg-blue-400/50 transition-all duration-300"
+            style={{ width: `${progress}%` }}
+          ></div>
+        )}
+        <span className="relative z-10 flex items-center justify-center gap-2">
+          {loading ? (
+            <>
+              <span className="animate-spin text-lg">⏳</span>
+              <span>{`Processing: ${currentFileIndex}/${files.length} (${progress}%)`}</span>
+            </>
+          ) : (
+            files.length > 1 ? "Upload All Resumes" : "Upload Resume"
+          )}
+        </span>
       </button>
 
       {result && (

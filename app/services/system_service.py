@@ -40,22 +40,28 @@ def _clear_directory(path: str, preserve_filenames: set[str] | None = None) -> i
 
 
 def clear_application_data() -> dict:
-    deleted_rows = delete_all_documents()
+    try:
+        deleted_rows = delete_all_documents()
 
-    upload_entries_deleted = 0
-    for path in UPLOAD_DIRS:
-        upload_entries_deleted += _clear_directory(path, preserve_filenames=PRESERVED_FILENAMES)
+        upload_entries_deleted = 0
+        for path in UPLOAD_DIRS:
+            upload_entries_deleted += _clear_directory(path, preserve_filenames=PRESERVED_FILENAMES)
 
-    vector_entries_deleted = _clear_directory(VECTOR_DIR, preserve_filenames=PRESERVED_FILENAMES)
-    database_compacted = vacuum_sqlite_database()
+        vector_entries_deleted = _clear_directory(VECTOR_DIR, preserve_filenames=PRESERVED_FILENAMES)
+        database_compacted = vacuum_sqlite_database()
 
-    return {
-        "message": "Application database cleared successfully.",
-        **deleted_rows,
-        "upload_entries_deleted": upload_entries_deleted,
-        "vector_entries_deleted": vector_entries_deleted,
-        "database_compacted": database_compacted,
-    }
+        return {
+            "message": "Application database cleared successfully.",
+            **deleted_rows,
+            "upload_entries_deleted": upload_entries_deleted,
+            "vector_entries_deleted": vector_entries_deleted,
+            "database_compacted": database_compacted,
+        }
+    except Exception as e:
+        import traceback
+        with open("bootstrap_log.txt", "a") as f:
+            f.write(f"\n[ERROR] Database Clear Failed: {e}\n{traceback.format_exc()}\n")
+        raise e
 
 
 def get_system_health() -> dict:

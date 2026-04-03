@@ -7,6 +7,7 @@ export default function TenderUpload({ onUploadComplete }) {
   const [file, setFile] = useState(null);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
 
   const handlePickFile = () => {
     fileInputRef.current?.click();
@@ -18,6 +19,7 @@ export default function TenderUpload({ onUploadComplete }) {
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+    setProgress(0);
     onUploadComplete?.(null, null);
   };
 
@@ -30,12 +32,20 @@ export default function TenderUpload({ onUploadComplete }) {
     try {
       setLoading(true);
 
+      setProgress(0);
+
       const formData = new FormData();
       formData.append("file", file);
 
       const res = await API.post("/tenders/upload", formData, {
         headers: {
           "Content-Type": "multipart/form-data",
+        },
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setProgress(percentCompleted);
+          }
         },
       });
 
@@ -46,6 +56,7 @@ export default function TenderUpload({ onUploadComplete }) {
       alert("Tender upload failed");
     } finally {
       setLoading(false);
+      setProgress(0);
     }
   };
 
@@ -91,9 +102,24 @@ export default function TenderUpload({ onUploadComplete }) {
       <button
         onClick={uploadTender}
         disabled={loading}
-        className="w-full rounded-lg bg-green-600 px-4 py-3 text-white hover:bg-green-700 disabled:opacity-50"
+        className="w-full relative overflow-hidden rounded-lg bg-green-600 px-4 py-3 text-white hover:bg-green-700 disabled:opacity-50"
       >
-        {loading ? "Uploading..." : "Upload Tender"}
+        {loading && (
+          <div 
+            className="absolute left-0 top-0 h-full bg-green-500/50 transition-all duration-300"
+            style={{ width: `${progress === 0 ? 10 : progress}%` }}
+          ></div>
+        )}
+        <span className="relative z-10 flex items-center justify-center gap-2">
+          {loading ? (
+            <>
+              <span className="animate-spin text-lg">⏳</span>
+              <span>{progress < 100 ? `Uploading... ${progress}%` : "AI Processing..."}</span>
+            </>
+          ) : (
+            file ? "Upload Tender" : "Choose Tender"
+          )}
+        </span>
       </button>
 
       {result && (

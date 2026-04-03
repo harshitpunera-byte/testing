@@ -82,6 +82,7 @@ Normalize equivalent degree names to one canonical value.
 Examples:
 - "b.tech", "btech", "b tech", "bachelor of technology", "bachlor of tecnology" -> "btech"
 - "m.tech", "master of technology" -> "mtech"
+- "m.e", "me", "master of engineering" -> "me"
 - "b.sc", "bachelor of science" -> "bsc"
 - "m.sc", "master of science" -> "msc"
 - "bca", "bachelor of computer applications" -> "bca"
