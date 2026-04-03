@@ -1,5 +1,8 @@
 import os
-os.environ["DATABASE_URL"] = "sqlite:///tender_rag.db"
+from dotenv import load_dotenv
+
+# Load database config from .env if present
+load_dotenv()
 
 from app.database.connection import session_scope
 from app.models.db_models import QualificationMaster, QualificationAlias

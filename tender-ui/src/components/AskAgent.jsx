@@ -132,10 +132,16 @@ function AssistantAnswer({ answer, error = false, errorMessage = "" }) {
 
   if (!answer) {
     return (
-      <div className="space-y-2">
-        <p className="text-sm font-semibold text-white">Analyzing...</p>
-        <p className="text-sm text-slate-400">
-          Reviewing the uploaded tender and resumes before responding.
+      <div className="space-y-3">
+        <div className="flex items-center gap-3">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-cyan-400 border-t-transparent" />
+          <p className="text-sm font-semibold text-white">AI is analyzing your request...</p>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+          <div className="h-full w-1/2 animate-[progress_1.5s_ease-in-out_infinite] rounded-full bg-cyan-400" />
+        </div>
+        <p className="text-xs text-slate-400">
+          Reviewing thousands of data points across your uploaded documents.
         </p>
       </div>
     );
@@ -227,6 +233,20 @@ function AssistantAnswer({ answer, error = false, errorMessage = "" }) {
           <p className="mb-2 font-semibold text-white">Reasoning Summary</p>
           <AnswerTextBlock text={answer.reasoning_summary} />
         </div>
+      )}
+      
+      {/* Generated SQL Section - Always available if returned */}
+      {answer.generated_sql && (
+        <details className="group rounded-2xl border border-slate-700/50 bg-slate-950/70 p-4 text-xs">
+          <summary className="cursor-pointer font-semibold text-cyan-400 transition hover:text-cyan-300">
+            View Structural SQL Query (Transparency Tool)
+          </summary>
+          <div className="mt-3 overflow-x-auto rounded-xl bg-black/60 p-3">
+            <pre className="whitespace-pre text-cyan-100/70 font-mono">
+              {answer.generated_sql}
+            </pre>
+          </div>
+        </details>
       )}
 
       {hasMatches ? (

@@ -33,8 +33,8 @@ Tasks:
 
 6. Experience: Convert "10+ years", "Minimum 10 years" to integer 10.
 
-Tender text:
-{text}
+Tender text (truncated if necessary):
+{text[:200000]}
 
 Return only valid JSON matching the provided schema.
 """

@@ -38,7 +38,7 @@ def _get_model():
         return None
 
     try:
-        _model = SentenceTransformer(MODEL_NAME, local_files_only=True)
+        _model = SentenceTransformer(MODEL_NAME)
         return _model
     except Exception as exc:
         _model_failed = True

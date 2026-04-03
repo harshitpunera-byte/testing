@@ -32,8 +32,8 @@ Tasks:
 
 5. Populate a "summary_for_matching" object containing "must_store_generic_values" which aggregates all generic IDs/tags for skills, qualifications, certifications, projects, role, and domain.
 
-Resume text:
-{text}
+Resume text (truncated if necessary):
+{text[:200000]}
 
 Return only valid JSON matching the provided schema.
 """

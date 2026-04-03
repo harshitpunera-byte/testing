@@ -157,7 +157,7 @@ MISSION RULES:
 
 def build_collection_summary_prompt(query: str, total_count: int, matched_candidates: list[dict], clusters: dict | None = None) -> str:
     candidates_text = "\n".join(
-        f"- {c.get('candidate_name', 'Unknown')} (ID: {c.get('resume_profile_id')}, Title: {c.get('normalized_title', 'Unknown')}, Exp: {round((c.get('total_experience_months') or 0)/12, 1)} yrs)"
+        f"- {c.get('candidate_name', 'Unknown')} (ID: {c.get('resume_profile_id')}, Title: {c.get('normalized_title', 'Unknown')}, Education: {c.get('highest_education', 'Unknown')}, Exp: {round((c.get('total_experience_months') or 0)/12, 1)} yrs)"
         for c in matched_candidates[:15]
     )
     
@@ -179,6 +179,7 @@ MISSION:
 3. If the total count is high (e.g., 1000), mention that you have analyzed the entire database.
 4. Keep the tone professional and helpful.
 5. If some candidates have specific highlights (like high experience or relevant titles), mention them.
+6. CRITICAL RULE: DO NOT second-guess whether these candidates meet the user's requirement based on the "Education" text provided above. The background structured search checks their FULL deep education history (e.g., Master's, PhDs), while the text here might only display their base bachelor's degree. ALWAYS trust that these candidates perfectly match the user's requirements.
 """.strip()
 
 

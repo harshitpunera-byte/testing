@@ -19,11 +19,16 @@ def _normalize_ollama_url(raw_url: str) -> str:
         return f"{url}/chat"
     return f"{url}/api/chat"
 
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
-OLLAMA_EXTRACTION_MODEL = os.getenv("OLLAMA_EXTRACTION_MODEL", OLLAMA_MODEL)
-OLLAMA_REASONING_MODEL = os.getenv("OLLAMA_REASONING_MODEL", OLLAMA_MODEL)
+
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower().strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o").strip()
+
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b").strip()
+OLLAMA_EXTRACTION_MODEL = os.getenv("OLLAMA_EXTRACTION_MODEL", OLLAMA_MODEL).strip()
+OLLAMA_REASONING_MODEL = os.getenv("OLLAMA_REASONING_MODEL", OLLAMA_MODEL).strip()
 OLLAMA_FALLBACK_MODEL = os.getenv("OLLAMA_FALLBACK_MODEL", "").strip()
-OLLAMA_BASE_URL = _normalize_ollama_url(os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
+OLLAMA_BASE_URL = _normalize_ollama_url(os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip())
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90"))
 
 _ollama_backoff_until = 0.0
@@ -162,6 +167,40 @@ def _ollama_request(payload: dict, *, model_name: str) -> dict:
         raise RuntimeError(f"Ollama request failed: {exc}") from exc
 
 
+def _openai_request(payload: dict) -> dict:
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY not configured")
+
+    # Using ensure_ascii=True to avoid latin-1 encoding issues in headers/body
+    try:
+        body_str = json.dumps(payload, ensure_ascii=True)
+        data_bytes = body_str.encode("ascii")
+    except Exception as exc:
+        # Fallback to UTF-8 if something goes wrong, though ASCII should cover everything due to escaping
+        data_bytes = json.dumps(payload).encode("utf-8")
+
+    req = request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=data_bytes,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+        },
+        method="POST",
+    )
+
+    try:
+        # OpenAI usually takes less time than 90s, but we'll use 60s for safety
+        with request.urlopen(req, timeout=60) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body)
+    except error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(error_body or f"OpenAI HTTP error {exc.code}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"OpenAI request failed: {exc}") from exc
+
+
 def _extract_ollama_content(parsed_response: dict) -> str:
     raw_content = (
         parsed_response.get("message", {}).get("content")
@@ -253,33 +292,85 @@ def _call_ollama_text(prompt: str, task: str = "default") -> str:
     raise RuntimeError("No Ollama model configured")
 
 
+def _call_openai_json(prompt: str, schema: dict) -> str:
+    payload = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Return only valid JSON matching the supplied schema. Do not include markdown or commentary.",
+            },
+            {
+                "role": "user",
+                "content": f"{prompt}\n\nJSON schema:\n{json.dumps(schema, ensure_ascii=True)}",
+            },
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0,
+    }
+    
+    parsed = _openai_request(payload)
+    content = parsed.get("choices", [{}])[0].get("message", {}).get("content")
+    if not content:
+        raise RuntimeError("OpenAI returned an empty JSON response")
+        
+    return json.dumps(_coerce_to_json_object(content, schema))
+
+
+def _call_openai_text(prompt: str) -> str:
+    payload = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Answer only from the provided context. If the context is insufficient, say that clearly.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        "temperature": 0,
+    }
+
+    parsed = _openai_request(payload)
+    content = parsed.get("choices", [{}])[0].get("message", {}).get("content")
+    if not content:
+        raise RuntimeError("OpenAI returned an empty text response")
+        
+    return content.strip()
+
+
 def llm_json_extract(prompt: str, schema: dict, task: str = "extraction") -> str:
     """
-    Call the configured local Ollama provider and return a raw JSON string.
-    If Ollama is unavailable, return a schema-shaped fallback.
+    Call the configured LLM provider (OpenAI or Ollama) and return a raw JSON string.
     """
-    last_error = None
+    if LLM_PROVIDER == "openai":
+        try:
+            return _call_openai_json(prompt, schema)
+        except Exception as exc:
+            print(f"OpenAI JSON extraction failed: {exc}")
+            return json.dumps(_fallback_from_schema(schema))
 
+    # Default to Ollama
     try:
         return _call_ollama_json(prompt, schema, task=task)
     except Exception as exc:
-        last_error = exc
-
-    if last_error:
-        print(f"Ollama unavailable, using schema fallback: {last_error}")
-
-    return json.dumps(_fallback_from_schema(schema))
+        print(f"Ollama unavailable, using schema fallback: {exc}")
+        return json.dumps(_fallback_from_schema(schema))
 
 
 def llm_text_answer(prompt: str, task: str = "reasoning") -> str:
-    last_error = None
+    if LLM_PROVIDER == "openai":
+        try:
+            return _call_openai_text(prompt)
+        except Exception as exc:
+            print(f"OpenAI text-answer failed: {exc}")
+            return ""
 
+    # Default to Ollama
     try:
         return _call_ollama_text(prompt, task=task)
     except Exception as exc:
-        last_error = exc
-
-    if last_error:
-        print(f"Ollama text-answer unavailable: {last_error}")
-
-    return ""
+        print(f"Ollama text-answer unavailable: {exc}")
+        return ""

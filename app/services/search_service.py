@@ -121,40 +121,53 @@ def _extract_max_notice_period(query: str) -> int | None:
     return None
 
 
-def _extract_education(query: str) -> str | None:
-    lowered = " ".join(query.lower().split())
-    # Detect generic graduation
-    if any(term in lowered for term in ["graduate", "graduation", "degree"]):
-        return "degree_graduation"
-
-    # Try mapping using database-backed matching_utils
-    # We strip common filler words or phrases
-    cleaned_query = re.sub(r"\b(how|many|are|show|me|list|all|candidates|who|have|done|did|the|a|an)\b", "", lowered).strip()
+def _extract_education_dynamic(query: str):
+    lowered = query.lower()
     
-    # Try the whole query first, then parts
-    gkey = resolve_qualification_generic_key(cleaned_query)
-    if gkey:
-        return gkey
-
-    # Check for common abbreviations if database lookup failed for whole phrase
-    degrees = {
-        "btech": "degree_b_tech",
-        "b.tech": "degree_b_tech",
-        "mtech": "degree_m_tech",
-        "m.tech": "degree_m_tech",
-        "bca": "degree_bca",
-        "mca": "degree_mca",
-        "mba": "degree_mba",
-        "bba": "degree_bba",
-        "bcom": "degree_b_com",
-        "bsc": "degree_b_sc",
-        "msc": "degree_m_sc",
-        "barch": "degree_b_arch",
+    # Check for negation
+    negation_match = re.search(rf"\b(not|no|without|except)\b", lowered)
+    is_negated = bool(negation_match)
+    
+    # Common degree patterns
+    degrees = [
+        "btech", "b.tech", "be", "b.e", "bachelor of engineering",
+        "mtech", "m.tech", "me", "m.e", "master of engineering",
+        "bca", "mca", "mba", "bba", "bcom", "bsc", "b.sc", "msc", "m.sc",
+        "barch", "b.arch", "diploma", "phd", "graduation", "post graduation",
+        "masters", "master", "master's", "bachelors", "bachelor", "bachelor's", "pg", "ug"
+    ]
+    
+    found_degree = None
+    # 1. Try to find one of the common abbreviations first
+    for d in degrees:
+        if re.search(rf"\b{re.escape(d)}\b", lowered):
+            found_degree = d
+            break
+            
+    # 2. If no abbreviation, try to find a phrase like "degree in X" or "bachelor of X"
+    if not found_degree:
+        match = re.search(r"(?:degree|graduation|specialization|bachelor of|master of|masters in|diploma in)\s+(?:in\s+)?([a-z\s]{2,30})", lowered)
+        if match:
+            found_degree = match.group(1).strip()
+            
+    if not found_degree and not is_negated:
+        return None
+        
+    degree_mapping_normalization = {
+        "masters": "master",
+        "master's": "master",
+        "bachelors": "bachelor",
+        "bachelor's": "bachelor"
     }
-    for key, val in degrees.items():
-        if key in lowered:
-            return val
-    return None
+    
+    normalized_degree = found_degree or "education"
+    if normalized_degree in degree_mapping_normalization:
+        normalized_degree = degree_mapping_normalization[normalized_degree]
+        
+    return {
+        "degree_name": normalized_degree,
+        "is_negated": is_negated
+    }
 
 
 def _classify_query_mode(query: str, parsed: dict) -> str:
@@ -163,7 +176,9 @@ def _classify_query_mode(query: str, parsed: dict) -> str:
         return "semantic"
     if any(term in lowered for term in ["rank", "top", "best", "shortlist"]):
         return "structured_rank"
-    if parsed["skills"] or parsed["min_experience_years"] or parsed["location"] or parsed["max_notice_period_days"] or parsed["education"]:
+    if parsed["skills"] or parsed["min_experience_years"] or parsed["location"] or parsed["max_notice_period_days"] or (parsed["education"] and not parsed["education"]["is_negated"]):
+        return "structured_filter"
+    if parsed["education"] and parsed["education"]["is_negated"]:
         return "structured_filter"
     return "hybrid"
 
@@ -175,7 +190,7 @@ def parse_search_query(query: str) -> dict:
         "location": _extract_location(query),
         "min_experience_years": _extract_min_experience(query),
         "max_notice_period_days": _extract_max_notice_period(query),
-        "education": _extract_education(query),
+        "education": _extract_education_dynamic(query),
     }
     parsed["mode"] = _classify_query_mode(query, parsed)
     return parsed
@@ -260,6 +275,12 @@ def search_resumes(query: str, page: int = 1, page_size: int = 20) -> dict:
             .join(Document, Document.id == ResumeProfile.document_id)
             .where(Document.processing_status == "stored", Document.document_type == "resume")
         )
+        
+        # We also need to be able to filter by deep education records
+        from app.models.db_models import ResumeEducation
+        
+        # Capture the raw SQL later
+        sql_parts = []
 
         if parsed["title"]:
             statement = statement.where(ResumeProfile.normalized_title.ilike(f"%{parsed['title']}%"))
@@ -275,21 +296,38 @@ def search_resumes(query: str, page: int = 1, page_size: int = 20) -> dict:
                 )
             )
         if parsed["education"]:
-            # Check for generic graduation or specific degree
-            if parsed["education"] == "degree_graduation":
-                statement = statement.where(
+            edu_info = parsed["education"]
+            degree_name = edu_info["degree_name"]
+            is_negated = edu_info["is_negated"]
+            
+            # Normalize name for search (remove dots for broader matching)
+            clean_name = degree_name.replace(".", "").replace(" ", "")
+            
+            # Subquery to find candidates with the specific degree
+            education_subquery = (
+                select(ResumeEducation.resume_profile_id)
+                .where(
                     or_(
-                        ResumeProfile.highest_education.isnot(None),
-                        ResumeProfile.highest_education != ""
+                        func.replace(func.replace(ResumeEducation.degree, ".", ""), " ", "").ilike(f"%{clean_name}%"),
+                        ResumeEducation.generic_key.ilike(f"%{degree_name.replace(' ', '_')}%")
+                    )
+                )
+            )
+            
+            if is_negated:
+                # Exclude these candidates
+                statement = statement.where(
+                    and_(
+                        func.replace(func.replace(ResumeProfile.highest_education, ".", ""), " ", "").not_ilike(f"%{clean_name}%"),
+                        ResumeProfile.id.not_in(education_subquery)
                     )
                 )
             else:
-                # We check if generic_key matches or title contains the short version
-                match_val = parsed["education"].replace("degree_", "").replace("_", " ")
+                # Include these candidates
                 statement = statement.where(
                     or_(
-                        ResumeProfile.highest_education.ilike(f"%{match_val}%"),
-                        ResumeProfile.highest_education.ilike(f"%{match_val.replace(' ', '')}%")
+                        func.replace(func.replace(ResumeProfile.highest_education, ".", ""), " ", "").ilike(f"%{clean_name}%"),
+                        ResumeProfile.id.in_(education_subquery)
                     )
                 )
 
@@ -303,6 +341,12 @@ def search_resumes(query: str, page: int = 1, page_size: int = 20) -> dict:
                 .having(func.count(ResumeSkill.id) >= len(parsed["skills"]))
             )
             statement = statement.where(ResumeProfile.id.in_(skill_subquery))
+
+        # Capture SQL for debugging/UI
+        try:
+            generated_sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
+        except Exception:
+            generated_sql = "Structured SQL generation in progress..."
 
         total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
         rows = db.execute(
@@ -399,6 +443,7 @@ def search_resumes(query: str, page: int = 1, page_size: int = 20) -> dict:
     return {
         "mode": mode,
         "parsed_constraints": parsed,
+        "generated_sql": generated_sql,
         "total": int(total),
         "page": page,
         "page_size": page_size,

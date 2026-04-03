@@ -1424,10 +1424,20 @@ def _answer_qa(
         chunk_window=0,
     )
 
-    # Collection Query Special Handling: Use structured search for aggregate questions
+    # Always try to generate a structured search in the background for transparency/SQL exposure
+    bg_search_sql = None
+    if scope == "resume":
+        try:
+            bg_search_res = search_resumes(query, page=1, page_size=1)
+            bg_search_sql = bg_search_res.get("generated_sql")
+        except Exception:
+            pass
+
+    # Collection Query Trigger: Use structured search for aggregate or broad candidate questions
+    collection_keywords = {"all", "list", "candidates", "how many", "find", "resumes", "applicants"}
     is_collection_query = (
         scope == "resume" 
-        and any(hint in query.lower() for hint in COLLECTION_HINTS)
+        and any(hint in query.lower() for hint in collection_keywords)
     )
     if is_collection_query:
         search_result = search_resumes(query, page=1, page_size=20)
@@ -1446,8 +1456,9 @@ def _answer_qa(
                     "message": f"Analyzed {total_matches} candidates using structured search.",
                     "answer_text": answer_text,
                     "sources": [],
-                    "matches": search_result.get("results", [])[:10],
+                    "matches": search_result.get("results", [])[:30],
                     "reasoning_summary": f"Found {total_matches} candidates matching criteria.",
+                    "generated_sql": search_result.get("generated_sql"),
                     **_build_human_intervention_state(active_documents_by_type, scope_documents),
                 }
 
@@ -1518,6 +1529,7 @@ def _answer_qa(
         "sources": _source_list(chunks),
         "matches": [],
         "reasoning_summary": "",
+        "generated_sql": bg_search_sql,
         **_build_human_intervention_state(active_documents_by_type, scope_documents),
     }
 

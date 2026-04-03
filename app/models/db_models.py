@@ -238,9 +238,9 @@ class ResumeProject(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     resume_profile_id: Mapped[int] = mapped_column(ForeignKey("resume_profiles.id", ondelete="CASCADE"), index=True, nullable=False)
-    project_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    project_name: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    domain: Mapped[str | None] = mapped_column(String(512), nullable=True)
     tech_stack: Mapped[list | dict] = mapped_column(json_type, default=list, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
