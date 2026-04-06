@@ -796,6 +796,14 @@ def extract_resume_data(text: str):
     if not result.get("domain") and heuristic.get("domain"):
         result["domain"] = heuristic["domain"]
 
+    if not result.get("education") and heuristic.get("education"):
+        # Convert simple strings or lists from heuristic to the expected List[str]
+        h_edu = heuristic.get("education")
+        if isinstance(h_edu, list):
+            result["education"] = h_edu
+        elif isinstance(h_edu, str):
+            result["education"] = [h_edu]
+
     # For complex list fields, we prefer LLM's structured raw/generic pairs.
     # If LLM returned nothing but heuristic found something, we can semi-populate.
     if not result.get("skills") and heuristic.get("skills"):

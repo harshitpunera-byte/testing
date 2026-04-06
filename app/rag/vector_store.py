@@ -163,8 +163,10 @@ def _semantic_search_fallback(
     for chunk in chunks:
         emb = chunk.get("embedding")
         if emb is not None:
-            embeddings.append(emb)
-            valid_chunks.append(dict(chunk))
+            # Defensive check: Ensure embedding length matches EMBEDDING_DIM
+            if isinstance(emb, (list, np.ndarray)) and len(emb) == EMBEDDING_DIM:
+                embeddings.append(emb)
+                valid_chunks.append(dict(chunk))
 
     if not embeddings:
         return []

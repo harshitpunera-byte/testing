@@ -1,122 +1,62 @@
 from typing import Dict, List
+import json
+from app.llm.provider import llm_text_answer
 
-
-def _build_candidate_reasoning(match: Dict) -> str:
-    filename = match.get("filename", "unknown.pdf")
-    score = match.get("score", 0)
-    verdict = match.get("verdict", "Unknown")
-    matched_skills = match.get("matched_skills", [])
-    missing_skills = match.get("missing_skills", [])
-    candidate_experience = match.get("candidate_experience")
-    required_experience = match.get("required_experience")
-    experience_match = match.get("experience_match", False)
-    disqualifiers = match.get("disqualifiers", [])
-    comparison_mismatches = match.get("comparison_mismatches", [])
-
-    reasons: List[str] = []
-
-    if disqualifiers:
-        reasons.append(
-            "This appears to be a false positive because "
-            + "; ".join(disqualifiers)
-            + "."
-        )
-
-    if matched_skills:
-        reasons.append(
-            f"{filename} matches these required skills: {', '.join(matched_skills)}."
-        )
-    else:
-        reasons.append(
-            f"{filename} does not match any of the extracted required skills."
-        )
-
-    if experience_match:
-        reasons.append(
-            f"Experience requirement is satisfied because the candidate has {candidate_experience} years against the required {required_experience} years."
-        )
-    else:
-        if required_experience is not None and candidate_experience is not None:
-            reasons.append(
-                f"Experience requirement is not satisfied because the candidate has {candidate_experience} years but the tender requires {required_experience} years."
-            )
-        else:
-            reasons.append(
-                "Experience comparison could not be fully validated from the extracted text."
-            )
-
-    if missing_skills:
-        reasons.append(
-            f"Missing or not detected skills: {', '.join(missing_skills)}."
-        )
-    else:
-        reasons.append("No required skills are missing based on current extraction.")
-
-    if comparison_mismatches and not disqualifiers:
-        reasons.append(
-            "Important context mismatches were also detected: "
-            + "; ".join(comparison_mismatches)
-            + "."
-        )
-
-    reasons.append(f"Overall suitability score is {score}% and verdict is {verdict}.")
-
-    return " ".join(reasons)
-
+def _get_ai_reasoning(match: Dict, tender_reqs: Dict) -> str:
+    """Uses LLM to generate a premium reasoning summary for a match."""
+    prompt = f"""
+    You are an AI Recruitment Specialist. Analyze the match between a candidate and a tender.
+    
+    Tender Requirements: {json.dumps(tender_reqs)}
+    
+    Candidate (Match Details): {json.dumps(match)}
+    
+    Task: Write a concise, professional 2-3 sentence summary explaining WHY this candidate fits OR why they are a partial match. 
+    Be specific about skills and education (especially if there's a semantic match like 'BTech' vs 'Bachelor of Engineering').
+    
+    Return ONLY the summary text.
+    """
+    return llm_text_answer(prompt)
 
 def reasoning_agent(state: Dict) -> Dict:
     matches = state.get("matches", [])
+    tender_reqs = state.get("tender_requirements", {})
+    query = state.get("query", "")
 
     enriched_matches = []
     shortlist = []
     rejected = []
 
     for match in matches:
-        explanation = _build_candidate_reasoning(match)
-
+        # Use LLM for premium reasoning if available, otherwise fallback to procedural
+        explanation = _get_ai_reasoning(match, tender_reqs)
+        
         enriched_match = {
             **match,
             "reasoning": explanation
         }
         enriched_matches.append(enriched_match)
 
-        if match.get("score", 0) >= 80 and match.get("experience_match", False):
-            shortlist.append(match.get("filename", "unknown.pdf"))
-        elif match.get("score", 0) < 50:
-            rejected.append(match.get("filename", "unknown.pdf"))
+        # Simple logic for shortlist/rejected for the summary
+        score = match.get("score") or 0
+        if score >= 75:
+            shortlist.append(match.get("filename", match.get("candidate_name", "unknown")))
+        elif score < 40:
+            rejected.append(match.get("filename", match.get("candidate_name", "unknown")))
 
-    summary_parts = []
-    valid_matches = [
-        match for match in enriched_matches
-        if match.get("eligibility_intent_match", True)
-    ]
-
-    if valid_matches:
-        best = valid_matches[0]
-        summary_parts.append(
-            f"Top candidate is {best.get('filename', 'unknown.pdf')} with score {best.get('score', 0)}%."
-        )
-    elif enriched_matches:
-        summary_parts.append(
-            "No valid candidate match was found; retrieved resumes only had superficial keyword overlap."
-        )
-    else:
-        summary_parts.append("No matching resumes were found.")
-
-    if shortlist:
-        summary_parts.append(
-            f"Shortlisted candidates: {', '.join(shortlist)}."
-        )
-
-    if rejected:
-        summary_parts.append(
-            f"Low suitability candidates: {', '.join(rejected)}."
-        )
-
-    summary = " ".join(summary_parts)
+    # Generate a final overall summary
+    summary_prompt = f"""
+    You are an AI Recruitment Lead. Summarize the search results for the user query: "{query}"
+    
+    Found {len(enriched_matches)} candidates.
+    Top Candidates: {", ".join(shortlist[:3])}
+    
+    Provide a professional 2-sentence overview of the pool's suitability for a client demo.
+    """
+    overall_summary = llm_text_answer(summary_prompt)
 
     return {
         **state,
         "matches": enriched_matches,
-        "reasoning_summary": summary
+        "reasoning_summary": overall_summary
     }

@@ -30,7 +30,6 @@ app.include_router(system_router)
 app.include_router(tender_router)
 app.include_router(resume_routes.router)
 
-
 @app.on_event("startup")
 def on_startup():
     init_db()

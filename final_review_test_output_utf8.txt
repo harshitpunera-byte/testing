@@ -1,0 +1,144 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.8, pytest-9.0.2, pluggy-1.6.0 -- D:\python3.10\python.exe
+cachedir: .pytest_cache
+rootdir: D:\Vocso\testing
+plugins: anyio-4.12.1, langsmith-0.3.45, typeguard-4.4.4
+collecting ... collected 6 items
+
+tests/test_review_service.py::test_document_needing_review_creates_task_and_items PASSED [ 16%]
+tests/test_review_service.py::test_approve_flow_updates_review_status PASSED [ 33%]
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit FAILED [ 50%]
+tests/test_review_service.py::test_matching_prefers_reviewed_canonical_data PASSED [ 66%]
+tests/test_review_service.py::test_score_candidate_rejects_bidder_tender_vs_consultant_cv_false_positive PASSED [ 83%]
+tests/test_review_service.py::test_search_returns_results_with_review_metadata PASSED [100%]
+
+================================== FAILURES ===================================
+____________ test_correction_flow_updates_canonical_data_and_audit ____________
+
+    def test_correction_flow_updates_canonical_data_and_audit():
+        structured_data = {
+            "candidate_name": "Rahul Sharma",
+            "role": "Python Developer",
+            "domain": "AI/ML",
+            "skills": [{"raw": "Python", "generic": "python"}],
+            "experience": 2,
+            "qualifications": [],
+            "projects": [],
+        }
+        document = _make_document(
+            document_type="resume",
+            suffix="correct",
+            structured_data=structured_data,
+            evidence_map=_resume_evidence(),
+            raw_text="Rahul Sharma Python Developer with 2 years of experience in Python.",
+        )
+    
+        result = sync_document_review_state(
+            document_id=document["id"],
+            document_type="resume",
+            text=document["raw_text"],
+            structured_data=structured_data,
+            evidence_map=_resume_evidence(),
+            extraction_backend="pymupdf",
+        )
+        corrected = correct_review_task(
+            result["review_task_id"],
+            reviewer="reviewer-a",
+            review_notes="Updated title, skills, and experience.",
+            corrections=[
+                {"field_name": "role", "corrected_value": "Senior Backend Engineer"},
+                {"field_name": "skills", "corrected_value": [
+                    {"raw": "Python", "generic": "python"},
+                    {"raw": "FastAPI", "generic": "fastapi"},
+                    {"raw": "PostgreSQL", "generic": "postgresql"}
+                ]},
+                {"field_name": "experience", "corrected_value": 6},
+            ],
+        )
+    
+        updated = get_document_by_id(document["id"])
+        normalized = get_resume_profile_with_relations(document["id"])
+        with session_scope() as db:
+            audit_rows = db.scalar(
+                select(func.count()).select_from(FieldChangeAudit).where(FieldChangeAudit.document_id == document["id"])
+            )
+    
+        assert corrected["status"] == "corrected"
+        assert updated["review_status"] == "corrected"
+        assert updated["reviewed_data"]["role"] == "Senior Backend Engineer"
+        assert updated["canonical_data_ready"] is True
+        assert int(audit_rows or 0) >= 3
+        assert normalized["normalized_title"] == "senior backend engineer"
+>       assert normalized["total_experience_months"] == 72
+E       assert None == 72
+
+tests\test_review_service.py:188: AssertionError
+============================== warnings summary ===============================
+tests/test_review_service.py: 103 warnings
+  D:\python3.10\Lib\site-packages\sqlalchemy\sql\schema.py:3624: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return util.wrap_callable(lambda ctx: fn(), fn)  # type: ignore
+
+tests/test_review_service.py::test_document_needing_review_creates_task_and_items
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\review_service.py:236: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    metadata_json["review_last_evaluated_at"] = datetime.utcnow().isoformat()
+
+tests/test_review_service.py::test_document_needing_review_creates_task_and_items
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\review_service.py:183: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    task.updated_at = datetime.utcnow()
+
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\review_service.py:423: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    document.approved_at = datetime.utcnow()
+
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\review_service.py:432: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    task.updated_at = datetime.utcnow()
+
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\review_service.py:437: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    review_summary["last_reviewed_at"] = datetime.utcnow().isoformat()
+
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\document_repository.py:496: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    row.updated_at = datetime.utcnow()
+
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+  D:\Vocso\testing\app\services\review_service.py:496: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    item.updated_at = datetime.utcnow()
+
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+  D:\Vocso\testing\app\services\review_service.py:507: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    changed_at=datetime.utcnow(),
+
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+  D:\Vocso\testing\app\services\review_service.py:518: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    document.approved_at = datetime.utcnow()
+
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+  D:\Vocso\testing\app\services\review_service.py:526: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    review_summary["last_reviewed_at"] = datetime.utcnow().isoformat()
+
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+  D:\Vocso\testing\app\services\review_service.py:533: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    task.updated_at = datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+================= 1 failed, 5 passed, 130 warnings in 17.11s ==================

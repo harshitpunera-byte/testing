@@ -26,6 +26,12 @@ PERSONNEL_MARKERS = [
     "consultant",
     "team leader",
     "professional",
+    "key personnel",
+    "highway engineer",
+    "bridge engineer",
+    "material engineer",
+    "quantity surveyor",
+    "project manager",
 ]
 
 TENDER_REVIEW_THRESHOLD = 0.80
@@ -151,8 +157,9 @@ def _extract_experience(text: str):
             continue
 
         patterns = [
-            r"(?:minimum|at least|not less than)\s+(\d+)\s+years?(?:\s+of)?\s+experience",
+            r"(?:minimum|at least|not less than)\s+(\d+)\s+years?(?:\s+of)?\s+(?:total|professional|relevant)?\s*experience",
             r"(\d+)\+?\s+years?(?:\s+of)?\s+experience",
+            r"experience\s*(?:of|not less than)?\s*(\d+)\s*years",
         ]
 
         for pattern in patterns:

@@ -99,7 +99,7 @@ export default function ResumeUpload({ onUploadComplete }) {
             },
           });
   
-          allProcessed.push({ ...res.data, filename: file.name, status: "stored" });
+          allProcessed.push({ ...res.data, filename: file.name, status: res.data?.status || "stored" });
           if (res.data?.document_id) allDocumentIds.push(res.data.document_id);
         } catch (err) {
           allFailed.push({ filename: file.name, error: err.response?.data?.message || err.message });
@@ -222,9 +222,9 @@ export default function ResumeUpload({ onUploadComplete }) {
               <p><strong>File:</strong> {result.filename}</p>
               <p><strong>Chunks:</strong> {result.chunks}</p>
               <p><strong>Stored Chunks:</strong> {result.stored_chunks}</p>
-              {result.review_status && <p><strong>Review Status:</strong> {result.review_status}</p>}
+              {result.review_status && <p><strong>Review Status:</strong> {String(result.review_status)}</p>}
               {result.extraction_confidence !== undefined && (
-                <p><strong>Extraction Confidence:</strong> {result.extraction_confidence}</p>
+                <p><strong>Extraction Confidence:</strong> {Number(result.extraction_confidence).toFixed(1)}%</p>
               )}
               {result.review_task_id && <p><strong>Review Task:</strong> #{result.review_task_id}</p>}
             </div>
@@ -242,12 +242,13 @@ export default function ResumeUpload({ onUploadComplete }) {
                   <ul className="max-h-40 space-y-1 overflow-auto">
                     {result.processed.map((item, index) => (
                       <li key={index}>
-                        {item.filename} — status: {item.status}, chunks: {item.chunks}, stored: {item.stored_chunks}, review: {item.review_status || "n/a"}
+                        {item.filename} — status: {String(item.status)}, chunks: {item.chunks}, stored: {item.stored_chunks}, review: {String(item.review_status || "n/a")}
                       </li>
                     ))}
                   </ul>
                 </div>
               )}
+
 
               {result.failed?.length > 0 && (
                 <div>

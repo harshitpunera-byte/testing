@@ -1,4 +1,7 @@
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.extraction.resume_extractor import extract_resume_data
 from app.extraction.tender_extractor import extract_tender_requirements
@@ -211,10 +214,13 @@ async def process_uploaded_document(file, document_type: str) -> dict:
         )
         invalidate_index(INDEX_NAMES[document_type])
 
+        # 6. Structured Extraction
         extractor = STRUCTURED_EXTRACTORS[document_type]
+        logger.info(f"Extracting structured data from {original_filename}...")
         structured_data = extractor(full_text)
         evidence_map = build_evidence_map(structured_data, chunk_records)
 
+        # 7. Final Update & Review Sync
         updated_document = update_document_record(
             document_record["id"],
             status="stored",
@@ -230,6 +236,8 @@ async def process_uploaded_document(file, document_type: str) -> dict:
                 "pipeline_version": INGESTION_PIPELINE_VERSION,
             },
         )
+        
+        logger.info(f"Syncing review state for {original_filename}...")
         review_state = sync_document_review_state(
             document_id=(updated_document or document_record)["id"],
             document_type=document_type,
@@ -238,9 +246,13 @@ async def process_uploaded_document(file, document_type: str) -> dict:
             evidence_map=evidence_map,
             extraction_backend=extracted.backend,
         )
+        
         updated_document = get_document_by_id((updated_document or document_record)["id"])
+        
+        # 8. Profile Normalization (for resumes)
         normalization_result = None
         if document_type == "resume":
+            logger.info(f"Normalizing resume profile for {original_filename}...")
             normalization_result = normalize_resume_profile(
                 updated_document["id"] if updated_document else document_record["id"],
                 preferred_structured_data(updated_document) or structured_data,
@@ -264,6 +276,10 @@ async def process_uploaded_document(file, document_type: str) -> dict:
                 entity_id=updated_document["id"] if updated_document else document_record["id"],
             )
 
+        logger.info(f"Ingestion COMPLETED for {original_filename}. Document ID: {document_record['id']}")
+
+        # Return a sanitized response for the UI to avoid [object Object] rendering issues
+        # But include the critical extraction data so the JSON tab is populated.
         return {
             "filename": original_filename,
             "status": "stored",
@@ -272,22 +288,31 @@ async def process_uploaded_document(file, document_type: str) -> dict:
             "stored_chunks": stored_count,
             "document_id": updated_document["id"] if updated_document else document_record["id"],
             "file_hash": file_hash,
-            "saved_path": saved_path,
             "pages": len(cleaned_pages),
             "extraction_backend": extracted.backend,
             "structured_data": structured_data,
             "evidence_map": evidence_map,
-            "review_status": (updated_document or {}).get("review_status"),
-            "auto_approved": (updated_document or {}).get("auto_approved"),
-            "canonical_data_ready": (updated_document or {}).get("canonical_data_ready"),
-            "uses_review_queue": (updated_document or {}).get("uses_review_queue"),
-            "extraction_confidence": (updated_document or {}).get("extraction_confidence"),
+            "review_status": (updated_document or {}).get("review_status", "not_needed"),
+            "extraction_confidence": (updated_document or {}).get("extraction_confidence", 100.0),
             "review_task_id": review_state.get("review_task_id"),
             "review_summary": review_state.get("review_summary", {}),
-            "normalization": normalization_result,
+            # Only send primitive metadata to the UI to stay safe
+            "metadata": {
+                "pages": len(cleaned_pages),
+                "chunks": len(chunk_records),
+                "backend": extracted.backend
+            }
         }
+
+
     except Exception as exc:
+        import traceback
+        traceback.print_exc()
         if document_record:
             purge_document_artifacts(document_record["id"])
-            update_document_record(document_record["id"], status="failed")
+            update_document_record(
+                document_record["id"], 
+                status="failed",
+                metadata_json={"error_message": str(exc), "pipeline_version": INGESTION_PIPELINE_VERSION}
+            )
         return _build_error_response(original_filename, f"Processing failed: {exc}", status="failed")

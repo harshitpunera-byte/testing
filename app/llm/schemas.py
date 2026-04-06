@@ -23,7 +23,7 @@ class MustStoreGenericValues(BaseModel):
 
 
 class MatchingSummary(BaseModel):
-    must_store_generic_values: MustStoreGenericValues
+    must_store_generic_values: Optional[MustStoreGenericValues] = None
 
 
 class TenderRequirements(BaseModel):
@@ -56,7 +56,7 @@ class ResumeProfile(BaseModel):
     domain: Optional[str] = None
     domain_generic: Optional[str] = None
     project_generic_tags: List[str] = Field(default_factory=list)
-    summary_for_matching: MatchingSummary
+    summary_for_matching: Optional[MatchingSummary] = None
 
 
 class EvidenceRecord(BaseModel):

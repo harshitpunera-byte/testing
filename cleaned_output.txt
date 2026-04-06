@@ -1,0 +1,17 @@
+DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/tender_rag
+Found 15 education records.
+ID: 8 | Degree: BE/B.Tech in Civil Engineering | Key: be
+ID: 8 | Degree: M.Tech in Structural Engineering | Key: mtech
+ID: 9 | Degree: BE Civil Engineering | Key: be
+ID: 9 | Degree: Master of Engineering Civil | Key: me
+ID: 9 | Degree: Doctor of Philosophy | Key: phd
+ID: 10 | Degree: BE Civil Engineering | Key: be
+ID: 10 | Degree: ME/M.Tech in Computer Science | Key: mtech
+ID: 11 | Degree: BSC Geology, Chemistry, Botany | Key: bsc
+ID: 11 | Degree: MSC Geology | Key: msc
+ID: 11 | Degree: Diploma in Civil Engineering | Key: diploma
+ID: 12 | Degree: Graduation in CIVIL Engineering or equivalent | Key: be
+ID: 13 | Degree: BE/B.Tech /B.Sc.(Engineering)/AMIE in CIVIL Engineering or equivalent | Key: be
+ID: 13 | Degree: M.Tech/ ME in Structural Engineering or equivalent | Key: mtech
+ID: 14 | Degree: BE/B.Tech /B.Sc.(Engineering)/ AMIE in CIVIL Engineering or equivalent | Key: be
+ID: 14 | Degree: M.Tech/ ME in Environmental Engineering or equivalent | Key: mtech

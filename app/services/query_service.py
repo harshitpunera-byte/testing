@@ -1,5 +1,8 @@
 import re
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 import os
 
 from app.agents.query_agent import (
@@ -39,6 +42,8 @@ from app.services.review_service import (
     preferred_structured_data,
 )
 from app.services.search_service import search_resumes
+from app.llm.intent_detector import detect_query_intent
+
 
 
 COLLECTION_QUERY_HINTS = {
@@ -1097,10 +1102,41 @@ def _search_scope_matches(
     restrict_to_active_uploads: bool = False,
     top_k_per_type: int = 8,
     total_top_k: int = 10,
+    ai_sub_queries: list[str] | None = None,
+    target_document_filename: str | None = None,
 ) -> list[dict]:
     all_matches = []
     active_documents_by_type = active_documents_by_type or {}
     requested_active_document_types = requested_active_document_types or set()
+
+    # 1. DYNAMIC ENTITY RESOLUTION
+    # Resolve the 'Target' (filename, candidate name, or ID) to actual document IDs
+    resolved_target_ids = []
+    if target_document_filename:
+         target_lowered = target_document_filename.lower()
+         for dtype in active_documents_by_type:
+              for doc in active_documents_by_type[dtype]:
+                   # A: Check Filename (without extension)
+                   fname = doc.get("original_filename", "").lower()
+                   fname_no_ext = fname.rsplit(".", 1)[0] if "." in fname else fname
+                   
+                   # B: Check Candidate Name
+                   cname = doc.get("candidate_name", "").lower()
+                   
+                   # C: Check ID
+                   doc_id = str(doc.get("id"))
+                   
+                   if target_lowered in fname_no_ext or target_lowered in cname or target_lowered == doc_id:
+                        resolved_target_ids.append(doc.get("id"))
+    
+    # Fallback to fuzzy string matching in the query itself if resolve failed
+    if not resolved_target_ids:
+         lowered_query = query.lower()
+         for dtype in active_documents_by_type:
+              for doc in active_documents_by_type[dtype]:
+                   fname = doc.get("original_filename", "").lower()
+                   if fname and fname in lowered_query:
+                        resolved_target_ids.append(doc.get("id"))
 
     for document_type in scope_documents:
         active_documents = active_documents_by_type.get(document_type, [])
@@ -1109,6 +1145,12 @@ def _search_scope_matches(
             for document in active_documents
             if document.get("id") is not None
         }
+        
+        # If specific entities were identified, restrict focus to them
+        mentioned_ids_of_type = [did for did in resolved_target_ids if did in active_document_ids]
+        if mentioned_ids_of_type:
+             active_document_ids = set(mentioned_ids_of_type)
+
         if restrict_to_active_uploads and not active_document_ids:
             continue
 
@@ -1130,6 +1172,8 @@ def _search_scope_matches(
             latest_document = get_latest_document(document_type)
 
         focused_queries = _build_search_queries(document_type, query)
+        if ai_sub_queries:
+            focused_queries = list(dict.fromkeys(focused_queries + ai_sub_queries))
 
         # SATURATING SEARCH: Use Active Documents first.
         doc_ids_to_search = list(active_document_ids)
@@ -1203,6 +1247,8 @@ def _gather_scope_context(
     total_top_k: int = 6,
     chunk_window: int = 0,
     max_chunks: int = 5,
+    ai_sub_queries: list[str] | None = None,
+    target_document_filename: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
     active_documents_by_type = active_documents_by_type or {}
     requested_active_document_types = requested_active_document_types or set()
@@ -1214,6 +1260,8 @@ def _gather_scope_context(
         restrict_to_active_uploads=restrict_to_active_uploads,
         top_k_per_type=top_k_per_type,
         total_top_k=total_top_k,
+        ai_sub_queries=ai_sub_queries,
+        target_document_filename=target_document_filename,
     )
 
     chunks = []
@@ -1395,12 +1443,28 @@ def _build_human_intervention_state(
     }
 
 
+def _extract_refinement_keywords(query: str) -> set[str]:
+    """Identify strictly required qualification/skill keywords in a list query."""
+    lowered = query.lower()
+    keywords = set()
+    
+    # Qualification Keywords
+    if any(k in lowered for k in ["masters", "mtech", "m.tech", "me", "msc", "mca", "mba", "post graduate", "postgraduate"]):
+        keywords.update(["mtech", "m.tech", "me", "msc", "mca", "mba", "masters"])
+    elif any(k in lowered for k in ["btech", "b.tech", "be", "bsc", "bca", "bachelors", "graduate", "undergraduate"]):
+        keywords.update(["btech", "b.tech", "be", "bsc", "bca", "bachelors"])
+        
+    return keywords
+
+
 def _answer_qa(
     query: str,
     scope: str,
     active_documents_by_type: dict[str, list[dict]] | None = None,
     requested_active_document_types: set[str] | None = None,
     restrict_to_active_uploads: bool = False,
+    ai_sub_queries: list[str] | None = None,
+    target_document_filename: str | None = None,
 ) -> dict:
     scope_map = {
         "tender": ["tender"],
@@ -1422,7 +1486,10 @@ def _answer_qa(
         total_top_k=24,
         max_chunks=24,
         chunk_window=0,
+        ai_sub_queries=ai_sub_queries,
+        target_document_filename=target_document_filename
     )
+
 
     # Always try to generate a structured search in the background for transparency/SQL exposure
     bg_search_sql = None
@@ -1434,21 +1501,48 @@ def _answer_qa(
             pass
 
     # Collection Query Trigger: Use structured search for aggregate or broad candidate questions
+    # But ONLY if the user isn't asking about a specific file (e.g. BE.pdf)
     collection_keywords = {"all", "list", "candidates", "how many", "find", "resumes", "applicants"}
+    known_extensions = {".pdf", ".docx", ".doc", ".txt"}
+    
     is_collection_query = (
         scope == "resume" 
         and any(hint in query.lower() for hint in collection_keywords)
+        and not any(ext in query.lower() for ext in known_extensions)
     )
     if is_collection_query:
+
         search_result = search_resumes(query, page=1, page_size=20)
-        total_matches = search_result.get("total", 0)
         bg_search_sql = search_result.get("generated_sql")
+        
+        # PRECISION FILTERING: Filter non-matches from the AI summary context
+        refinement_keywords = _extract_refinement_keywords(query)
+        candidates_to_summarize = search_result.get("results", [])
+        
+        if refinement_keywords:
+             filtered_candidates = []
+             for c in candidates_to_summarize:
+                  # Keep only those with > 0 score and matching keywords in education or summary
+                  score = c.get("score", 0)
+                  summ = (c.get("summary_text") or "").lower()
+                  edu = (c.get("highest_education") or "").lower()
+                  
+                  # If the score is > 20%, it's already a strong candidate
+                  if score > 20:
+                       filtered_candidates.append(c)
+                  # If the score is lower, strictly check for the requested keyword
+                  elif any(k in summ or k in edu for k in refinement_keywords):
+                       filtered_candidates.append(c)
+             
+             candidates_to_summarize = filtered_candidates
+
+        total_matches = len(candidates_to_summarize)
         
         if total_matches > 0:
             prompt = build_collection_summary_prompt(
                 query=query, 
                 total_count=total_matches, 
-                matched_candidates=search_result.get("results", [])
+                matched_candidates=candidates_to_summarize
             )
             answer_text = llm_text_answer(prompt).strip()
             if answer_text:
@@ -1559,6 +1653,32 @@ def answer_query(
         tender_document_id=tender_document_id,
         resume_document_ids=resume_document_ids,
     )
+    
+    # 0. DETERMINISTIC ENTITY GUARDRAIL (Production-Grade)
+    # Scan the query for any candidate names or filenames to force LOCAL scope
+    detected_entities = []
+    lowered_query = query.lower()
+    for dtype in active_documents_by_type:
+         for doc in active_documents_by_type[dtype]:
+              # A: Check Candidate Name (case-insensitive fuzzy match in query)
+              cname = doc.get("candidate_name", "").lower()
+              if cname and cname in lowered_query:
+                   detected_entities.append(doc.get("candidate_name"))
+              
+              # B: Check Filename (without extension matching)
+              fname = doc.get("original_filename", "").lower()
+              fname_no_ext = fname.rsplit(".", 1)[0] if "." in fname else fname
+              if fname_no_ext and fname_no_ext in lowered_query:
+                   detected_entities.append(fname_no_ext)
+                   
+              # C: Check ID match
+              doc_id_str = f"#{doc.get('id')}"
+              if doc_id_str in lowered_query:
+                   detected_entities.append(doc.get('original_filename', 'Document'))
+
+    # Sort and unique
+    detected_entities = sorted(list(set(detected_entities)))
+    
     active_scope_enabled = (
         restrict_to_active_uploads
         or tender_document_id is not None
@@ -1578,9 +1698,35 @@ def answer_query(
     if resume_document_ids:
         requested_active_document_types.add("resume")
 
-    intent = classify_query_intent(query, has_tender=has_tender, has_resume=has_resume)
+    # 1. Detect Intent using LLM (Agentic Routing)
+    ai_intent = detect_query_intent(query)
+    
+    # 2. Apply Deterministic Override (Entity Guardrail)
+    # If the user mentioned a specific name or file, we MUST treat it as LOCAL
+    if detected_entities:
+         logger.info(f"Entity Guardrail Triggered: Found {detected_entities}. Forcing LOCAL granularity.")
+         ai_intent.granularity = "LOCAL"
+         ai_intent.target_document = detected_entities[0] # Focus on the first detected match
+         
+    # 2.5. TENDER AFFINITY GUARDRAIL
+    # If user asks for "Tender" and no specific resume name is detected, force SEARCH_TENDER
+    if any(k in lowered_query for k in ["tender", "rfp", "project requirements"]) and not detected_entities:
+         if ai_intent.intent != "MATCHING":
+              logger.info("Tender Affinity Guardrail: Forcing SEARCH_TENDER intent.")
+              ai_intent.intent = "SEARCH_TENDER"
+              ai_intent.granularity = "LOCAL"
 
-    if intent["mode"] == "matching":
+    logger.info(f"Agentic Dispatcher: Intent={ai_intent.intent}, Granularity={ai_intent.granularity}, Target={ai_intent.target_document}")
+    
+    # 2. Add sub-queries for frontend transparency
+    sub_queries = ai_intent.sub_queries or [query]
+    
+    # 3. Production-Grade Dispatcher Logic
+
+    
+    # CASE A: MATCHING (always specialized)
+    if ai_intent.intent == "MATCHING":
+        logger.info("Routing to MATCHING workflow...")
         result = match_resumes_with_uploaded_tender(
             query,
             tender_document_id=tender_document_id,
@@ -1588,33 +1734,58 @@ def answer_query(
             restrict_to_active_uploads=restrict_to_active_uploads,
         )
         result["mode"] = "matching"
-        result["query_scope"] = "both"
-        result.update(
-            _build_human_intervention_state(
-                active_documents_by_type,
-                ["tender", "resume"],
-            )
-        )
+        result["query_intent"] = ai_intent.intent
+        result["sub_queries"] = sub_queries
+        result.update(_build_human_intervention_state(active_documents_by_type, ["tender", "resume"]))
         return result
 
-    if intent["mode"] == "qa":
-        return _answer_qa(
+    # CASE B: GLOBAL SEARCH (Finding people across the database)
+    if ai_intent.intent == "SEARCH_RESUMES" and ai_intent.granularity == "GLOBAL":
+        logger.info("Routing to GLOBAL SEARCH_RESUMES workflow...")
+        search_result = search_resumes(query, page=1, page_size=20)
+        return {
+            "mode": "qa",
+            "query_scope": "resume",
+            "query_intent": ai_intent.intent,
+            "sub_queries": sub_queries,
+            "message": f"Global analysis completed across {search_result.get('total', 0)} candidates.",
+            "answer_text": search_result.get("reasoning_summary", ""),
+            "sources": [],
+            "matches": search_result.get("results", []),
+            "reasoning_summary": search_result.get("reasoning_summary", ""),
+            "generated_sql": search_result.get("generated_sql"),
+            **_build_human_intervention_state(active_documents_by_type, ["resume"]),
+        }
+
+    # CASE C: LOCAL EXTRACTION or GENERAL QA (Specific Document Facts)
+    # This includes SEARCH_RESUMES if it's LOCAL (e.g. "BE.pdf companies")
+    scope = "tender" if ai_intent.intent == "SEARCH_TENDER" else "resume"
+    if ai_intent.intent == "GENERAL" or ai_intent.granularity == "LOCAL":
+         # If it's a general question or document-specific, use the RAG/QA flow
+         if ai_intent.intent == "GENERAL" and not (has_tender or has_resume):
+              scope = "both" # Fallback for greetings/non-doc questions
+         
+         logger.info(f"Routing to LOCAL RAG/QA workflow. Scope={scope}, Target={ai_intent.target_document}")
+         return _answer_qa(
             query,
-            scope=intent["scope"],
+            scope=scope,
             active_documents_by_type=active_documents_by_type,
             requested_active_document_types=requested_active_document_types,
             restrict_to_active_uploads=restrict_to_active_uploads,
+            ai_sub_queries=sub_queries,
+            target_document_filename=ai_intent.target_document
         )
 
-    return {
-        "mode": "none",
-        "query_scope": "none",
-        "message": "No uploaded tender or resume documents were found.",
-        "answer_text": "",
-        "sources": [],
-        "matches": [],
-        "reasoning_summary": "",
-        "human_intervention_required": False,
-        "human_intervention_reason": "",
-        "review_tasks": [],
-    }
+    # Fallback to general RAG
+    return _answer_qa(
+        query,
+        scope="both",
+        active_documents_by_type=active_documents_by_type,
+        requested_active_document_types=requested_active_document_types,
+        restrict_to_active_uploads=restrict_to_active_uploads,
+        ai_sub_queries=sub_queries,
+        target_document_filename=ai_intent.target_document
+    )
+
+
+

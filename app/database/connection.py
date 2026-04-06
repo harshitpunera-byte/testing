@@ -65,6 +65,7 @@ def _resolve_database_url() -> str:
 
 
 DATABASE_URL = _resolve_database_url()
+print(f"DATABASE_URL: {DATABASE_URL}")
 
 Base = declarative_base()
 
@@ -103,8 +104,7 @@ def _configure_engine(database_url: str) -> None:
 
 
 def _can_fallback_to_sqlite() -> bool:
-    if os.getenv("ALLOW_SQLITE_FALLBACK") == "0":
-        return False
+    return os.getenv("ALLOW_SQLITE_FALLBACK") == "1"
 
     explicit_database_url = os.getenv("DATABASE_URL")
     if not explicit_database_url:
@@ -210,13 +210,27 @@ def validate_database_or_raise() -> None:
                 )
             try:
                 connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-                dimension = connection.execute(text("SELECT extname FROM pg_extension WHERE extname = 'vector'")).scalar()
-                if dimension != "vector":
-                    raise RuntimeError("pgvector extension is not enabled in the configured PostgreSQL database.")
+                
+                # Verify that any existing vector columns match the EMBEDDING_DIM
+                # This prevents "inhomogeneous embedding" errors at runtime.
+                # Table: document_chunks, column: embedding
+                result = connection.execute(text(
+                    "SELECT atttypmod FROM pg_attribute "
+                    "WHERE attrelid = 'document_chunks'::regclass AND attname = 'embedding'"
+                )).scalar()
+                
+                if result is not None and result > 0 and result != EMBEDDING_DIM:
+                    raise RuntimeError(
+                        f"CRITICAL: Database vector dimension mismatch. "
+                        f"DB expects {result}, but app is configured for EMBEDDING_DIM={EMBEDDING_DIM}. "
+                        f"You must either reset the database or update EMBEDDING_DIM in .env."
+                    )
             except Exception as exc:
+                if "mismatch" in str(exc):
+                    raise
                 raise RuntimeError(
-                    "PostgreSQL is reachable but pgvector is unavailable. "
-                    "Install/enable the extension before starting the app."
+                    "PostgreSQL is reachable but pgvector is unavailable or needs configuration. "
+                    "Error: " + str(exc)
                 ) from exc
 
 
@@ -241,30 +255,23 @@ def _ensure_postgres_indexes() -> None:
 
     with engine.begin() as connection:
         for statement in statements:
-            connection.execute(text(statement))
+            try:
+                connection.execute(text(statement))
+            except Exception as exc:
+                print(f"Warning: Could not create index: {exc}")
 
 
 def init_db() -> None:
     from app.models import db_models  # noqa: F401
 
     if _is_postgres(DATABASE_URL) and _startup_migrations_enabled():
-        try:
-            run_database_migrations()
-        except Exception:
-            if not _can_fallback_to_sqlite():
-                raise
-            _switch_to_sqlite_fallback()
+        run_database_migrations()
 
-    try:
-        validate_database_or_raise()
-    except Exception:
-        if not (_is_postgres(DATABASE_URL) and _can_fallback_to_sqlite()):
-            raise
-        _switch_to_sqlite_fallback()
-        validate_database_or_raise()
+    validate_database_or_raise()
 
     Base.metadata.create_all(bind=engine)
     _ensure_postgres_indexes()
+
 
 
 def database_health() -> dict:

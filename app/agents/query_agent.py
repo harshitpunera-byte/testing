@@ -150,7 +150,10 @@ MISSION RULES:
 5. DO NOT provide URLs or Links. Provide the actual information from the text.
 6. Explicitly mention which source label provided which part of the answer.
 7. If the context has a DOB, you MUST say it.
-8. If a snippet contains a direct field/value pair or glossary-style mapping (for example, "Date of Birth: 1st July 1970" or "LOA As defined in Clause 3.8.4"), copy that exact value instead of inferring.
+8. PRECISION SOURCE RULE: If a specific filename was identified as the 'Target' of the query (e.g. BE.pdf), FOCUS 100% on the evidence labeled with that filename. IGNORE other documents if they contradict the target document.
+9. If a snippet contains a direct field/value pair or glossary-style mapping (for example, "Date of Birth: 1st July 1970" or "LOA As defined in Clause 3.8.4"), copy that exact value instead of inferring.
+
+
 """
     return prompt.strip()
 
@@ -158,29 +161,34 @@ MISSION RULES:
 def build_collection_summary_prompt(query: str, total_count: int, matched_candidates: list[dict], clusters: dict | None = None) -> str:
     candidates_text = "\n".join(
         f"- {c.get('candidate_name', 'Unknown')} (ID: {c.get('resume_profile_id')}, Title: {c.get('normalized_title', 'Unknown')}, Education: {c.get('highest_education', 'Unknown')}, Exp: {round((c.get('total_experience_months') or 0)/12, 1)} yrs)"
-        for c in matched_candidates[:15]
+        for c in matched_candidates[:20]
     )
     
     return f"""
 YOU ARE A RECRUITMENT ANALYST.
-The user is asking a broad question about the entire candidate database.
-I have performed a structured search and found the following:
+The user is asking a specific question that requires an answer from the candidate database.
+I have performed a high-precision structured search and found the following facts:
 
 TOTAL MATCHES FOUND: {total_count}
 
-REPRESENTATIVE CANDIDATES:
+CANDIDATES DATA:
 {candidates_text}
 
 USER QUESTION: {query}
 
 MISSION:
-1. State clearly how many candidates matched the criteria based on the structured search.
-2. Provide a summary of the top candidates found.
-3. If the total count is high (e.g., 1000), mention that you have analyzed the entire database.
-4. Keep the tone professional and helpful.
-5. If some candidates have specific highlights (like high experience or relevant titles), mention them.
-6. CRITICAL RULE: DO NOT second-guess whether these candidates meet the user's requirement based on the "Education" text provided above. The background structured search checks their FULL deep education history (e.g., Master's, PhDs), while the text here might only display their base bachelor's degree. ALWAYS trust that these candidates perfectly match the user's requirements.
+1. AT FIRST, provide a DIRECT ANSWER to the user question. 
+   - If the user asks for a LIST OF NAMES, provide the names in a clean Markdown list.
+   - If the user asks HOW MANY, state the number clearly.
+2. After the direct answer, provide a 1-2 sentence factual reasoning (e.g., "All 3 found candidates have a recorded M.Tech degree").
+3. STRICT NEGATIVE RULE: If the list is empty or none of the candidates actually meet the requirement (e.g. they only have BTech when user wants Masters), say: "I could not find any candidates matching this specific requirement."
+4. STRICTURE: DO NOT use generic or flattering phrases like "the pool is well-suited for a client demo", "impressive skills", or "highlights of the pool". Be professional, direct, and critical.
+3. TRUTHFULNESS RULE: The structured search logic has ALREADY verified these candidates against the user's criteria (e.g., BTech degree, Science background, Company names).
+4. CRITICAL: NEVER say "I don't know" or "Context is insufficient" if candidates are listed above. If they are in the list, they ARE the answer.
+5. If some candidates have "Unknown" in their education field but are in this list, it is because their DEEP text (which you don't see here but the search engine saw) matches the user's specific degree requirement. DO NOT point out that their education is "Unknown" in your answer. Just trust they are valid.
+6. Keep the response concise and data-driven.
 """.strip()
+
 
 
 def build_exact_fact_summary_prompt(query: str, extracted_facts: str, chunks: list[dict]) -> str:

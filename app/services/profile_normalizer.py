@@ -23,6 +23,12 @@ CTC_PATTERN = re.compile(r"(current|expected)\s+ctc\s*[:\-]?\s*([\d.]+)", re.IGN
 LOCATION_PATTERN = re.compile(r"(?:location|address|city)\s*[:\-]?\s*([A-Za-z][A-Za-z\s,.-]{2,80})", re.IGNORECASE)
 
 
+def _get_val(item, key, default=None):
+    if isinstance(item, dict):
+        return item.get(key, default)
+    return item if key == "generic" or key == "raw" else default
+
+
 def _clean_text(value: str | None) -> str | None:
     if not value:
         return None
@@ -95,8 +101,8 @@ def _months_from_years(years: int | None) -> int | None:
 def _parse_education_rows(qualifications: list[dict]) -> list[dict]:
     rows = []
     for item in qualifications or []:
-        raw = item.get("raw")
-        generic = item.get("generic")
+        raw = _get_val(item, "raw")
+        generic = _get_val(item, "generic")
         rows.append(
             {
                 "degree": _clean_text(raw),
@@ -116,8 +122,8 @@ def _parse_education_rows(qualifications: list[dict]) -> list[dict]:
 def _parse_project_rows(projects: list[dict], role: str | None, domain: str | None) -> list[dict]:
     rows = []
     for item in projects or []:
-        raw = item.get("raw")
-        tags = item.get("generic_tags", [])
+        raw = _get_val(item, "raw")
+        tags = _get_val(item, "generic_tags", [])
         rows.append(
             {
                 "project_name": _clean_text(raw) or "Project",
@@ -166,8 +172,8 @@ def _parse_experience_rows(full_text: str, structured_data: dict) -> list[dict]:
 def _parse_certification_rows(certifications: list[dict]) -> list[dict]:
     rows = []
     for item in certifications or []:
-        raw = item.get("raw")
-        generic = item.get("generic")
+        raw = _get_val(item, "raw")
+        generic = _get_val(item, "generic")
         rows.append(
             {
                 "certification_name": _clean_text(raw)[:255],
@@ -184,8 +190,8 @@ def _parse_certification_rows(certifications: list[dict]) -> list[dict]:
 def _skill_rows(skills: list[dict], total_experience_months: int | None) -> list[dict]:
     rows = []
     for index, item in enumerate(skills or []):
-        raw = item.get("raw")
-        generic = item.get("generic")
+        raw = _get_val(item, "raw")
+        generic = _get_val(item, "generic")
         normalized = generic or _normalize_title(raw)
         if not normalized:
             continue
@@ -206,7 +212,7 @@ def _skill_rows(skills: list[dict], total_experience_months: int | None) -> list
 
 
 def _build_summary(structured_data: dict, full_text: str) -> str:
-    skills_raw = [s.get("raw") for s in structured_data.get("skills", []) if isinstance(s, dict)]
+    skills_raw = [_get_val(s, "raw") for s in structured_data.get("skills", []) if _get_val(s, "raw")]
     parts = [
         structured_data.get("candidate_name"),
         structured_data.get("role"),

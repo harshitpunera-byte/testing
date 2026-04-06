@@ -7,10 +7,10 @@ def test_tender_extractor_falls_back_to_llm_for_missing_preferred_skills_and_exp
         return TenderRequirements(
             role="Data Platform Lead",
             domain="AI/ML",
-            skills_required=["Python"],
-            preferred_skills=["Docker", "Kubernetes"],
+            skills_required=[{"raw": "Python", "generic": "python"}],
+            preferred_skills=[{"raw": "Docker", "generic": "docker"}, {"raw": "Kubernetes", "generic": "kubernetes"}],
             experience_required=7,
-            qualifications=["B.Tech"],
+            qualifications=[{"raw": "B.Tech", "generic": "btech"}],
             responsibilities=["Lead delivery"],
         )
 
@@ -20,5 +20,6 @@ def test_tender_extractor_falls_back_to_llm_for_missing_preferred_skills_and_exp
         "Tender scope covers modernization of enterprise data systems."
     )
 
-    assert result["preferred_skills"] == ["Docker", "Kubernetes"]
+    # assertions update for structured list format
+    assert [s["raw"] for s in result["preferred_skills"]] == ["Docker", "Kubernetes"]
     assert result["experience_required"] == 7

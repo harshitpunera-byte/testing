@@ -68,7 +68,7 @@ MANDATORY BASE FILTER
 ==================================================
 The query MUST include this filter in the WHERE clause:
 
-documents.processing_status = 'stored'
+(documents.processing_status IN ('stored', 'processed'))
 AND documents.document_type = 'resume'
 
 ==================================================
@@ -89,63 +89,20 @@ EXISTS (
 - For alternative skills ("python or java"), use OR between EXISTS blocks.
 - Prefer resume_skills over JSONB skills_normalized for exact skill filtering.
 
-2. Qualifications / Education
-If the user asks for degree/qualification filters, use EXISTS against resume_education.generic_key when the value is normalized.
+92. Qualifications / Education
+If the user asks for degree/qualification filters, search across both resume_education.generic_key AND resume_education.degree.
 
-CRITICAL MAPPING:
-The database uses strict canonical abbreviations, NOT full words or varying combinations.
-You MUST map semantic requests to these exact strings:
-- "btech": Bachelor of Technology / B.Tech / B.E / B-Tech
-- "mtech": Master of Technology / M.Tech
-- "me": Master of Engineering / M.E
-- "bsc": Bachelor of Science / B.Sc / BS
-- "msc": Master of Science / M.Sc / MS / Masters
-- "bca": Bachelor of Computer Applications
-- "mca": Master of Computer Applications
-- "mba": Master of Business Administration
-- "be": Bachelor of Engineering
-- "diploma": Diploma variants
-- "phd": Doctor of Philosophy
+CRITICAL MAPPING (STRICT):
+- 'btech', 'be', 'bsc', 'bca' are BACHELORS degrees.
+- 'mtech', 'me', 'msc', 'mca', 'mba' are MASTERS degrees.
 
-If the user asks a broad category like "masters", use an IN clause picking the appropriate master degrees:
-EXISTS (
-    SELECT 1
-    FROM resume_education
-    WHERE resume_education.resume_profile_id = resume_profiles.id
-      AND resume_education.generic_key IN ('mtech', 'me', 'msc', 'mca', 'mba')
-)
+If user asks specifically for "Bachelors" or "BTech", do NOT include Masters results unless explicitly requested.
+If user asks specifically for "Masters", do NOT include Bachelors (BSC/BTech) results.
 
-If the user asks for "bachelors", use:
-`resume_education.generic_key IN ('btech', 'bsc', 'bca', 'be')`
-
-If only raw education wording is clearly intended and no generic form is available, you may use degree with ILIKE conservatively.
-
-3. Role / Title
-Use:
-resume_profiles.normalized_title = 'python_backend_developer'
-or ILIKE only if the query is clearly non-normalized and exact normalized value is uncertain.
-
-Prefer exact match when the role is clearly canonical.
-
-4. Location
-Use:
-resume_profiles.location_city ILIKE '%delhi%'
-or exact equality if clearly appropriate.
-
-5. Experience
-Convert years to months.
-Examples:
-- 1 year  -> 12
-- 2 years -> 24
-- 3 years -> 36
-
-Use:
-resume_profiles.total_experience_months >= 36
-
-6. Notice Period
-Use:
-resume_profiles.notice_period_days <= 30
-or similar numeric comparison based on the user query.
+- Use resume_education.generic_key for common abbreviations.
+- Use resume_education.degree ILIKE for full titles or broad matching.
+- ALWAYS use an OR condition to capture all variations:
+  Example for BTech: (resume_education.generic_key IN ('btech', 'be') OR resume_education.degree ILIKE '%Bachelor of Technology%' OR resume_education.degree ILIKE '%Bachelor of Engineering%')
 
 7. Domains
 For domain filtering, use EXISTS with resume_search_index and JSONB containment where appropriate.
@@ -220,7 +177,7 @@ REQUIRED_SQL_START = (
 
 
 REQUIRED_WHERE_PARTS = [
-    "documents.processing_status = 'stored'",
+    "documents.processing_status IN ('stored', 'processed')",
     "documents.document_type = 'resume'",
 ]
 
@@ -292,7 +249,7 @@ def _fallback_sql() -> str:
     return """SELECT DISTINCT resume_profiles.id, resume_profiles.candidate_name, documents.id AS document_id
 FROM resume_profiles
 JOIN documents ON documents.id = resume_profiles.document_id
-WHERE documents.processing_status = 'stored'
+WHERE documents.processing_status IN ('stored', 'processed')
   AND documents.document_type = 'resume'
 LIMIT 100"""
 

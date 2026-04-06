@@ -45,7 +45,7 @@ def _resume_evidence() -> dict:
     return {
         "candidate_name": {"value": "Rahul Sharma", "page": 1, "source_text": "Rahul Sharma", "confidence": 0.94},
         "role": {"value": "Python Developer", "page": 1, "source_text": "Python Developer", "confidence": 0.84},
-        "experience": {"value": 2, "page": 1, "source_text": "2 years of experience", "confidence": 0.72},
+        "total_experience_years": {"value": 2, "page": 1, "source_text": "2 years of experience", "confidence": 0.72},
         "skills": [
             {"value": "Python", "page": 1, "source_text": "Python", "confidence": 0.88},
         ],
@@ -65,7 +65,7 @@ def test_document_needing_review_creates_task_and_items():
         "role": "Python Developer",
         "domain": "AI/ML",
         "skills": [],
-        "experience": None,
+        "total_experience_years": None,
         "qualifications": [],
         "projects": [],
     }
@@ -101,8 +101,8 @@ def test_approve_flow_updates_review_status():
         "candidate_name": "Rahul Sharma",
         "role": "Python Developer",
         "domain": "AI/ML",
-        "skills": ["Python"],
-        "experience": 2,
+        "skills": [{"raw": "Python", "generic": "python"}],
+        "total_experience_years": 2,
         "qualifications": [],
         "projects": [],
     }
@@ -136,8 +136,8 @@ def test_correction_flow_updates_canonical_data_and_audit():
         "candidate_name": "Rahul Sharma",
         "role": "Python Developer",
         "domain": "AI/ML",
-        "skills": ["Python"],
-        "experience": 2,
+        "skills": [{"raw": "Python", "generic": "python"}],
+        "total_experience_years": 2,
         "qualifications": [],
         "projects": [],
     }
@@ -163,8 +163,12 @@ def test_correction_flow_updates_canonical_data_and_audit():
         review_notes="Updated title, skills, and experience.",
         corrections=[
             {"field_name": "role", "corrected_value": "Senior Backend Engineer"},
-            {"field_name": "skills", "corrected_value": ["Python", "FastAPI", "PostgreSQL"]},
-            {"field_name": "experience", "corrected_value": 6},
+            {"field_name": "skills", "corrected_value": [
+                {"raw": "Python", "generic": "python"},
+                {"raw": "FastAPI", "generic": "fastapi"},
+                {"raw": "PostgreSQL", "generic": "postgresql"}
+            ]},
+            {"field_name": "total_experience_years", "corrected_value": 6},
         ],
     )
 
@@ -190,7 +194,7 @@ def test_matching_prefers_reviewed_canonical_data():
         "structured_data": {
             "role": "Old Tender Role",
             "domain": "Legacy",
-            "skills_required": ["Cobol"],
+            "skills_required": [{"raw": "Cobol", "generic": "cobol"}],
             "preferred_skills": [],
             "experience_required": 3,
             "qualifications": [],
@@ -199,8 +203,8 @@ def test_matching_prefers_reviewed_canonical_data():
         "reviewed_data": {
             "role": "Senior Backend Engineer",
             "domain": "AI/ML",
-            "skills_required": ["Python", "FastAPI"],
-            "preferred_skills": ["PostgreSQL"],
+            "skills_required": [{"raw": "Python", "generic": "python"}, {"raw": "FastAPI", "generic": "fastapi"}],
+            "preferred_skills": [{"raw": "PostgreSQL", "generic": "postgresql"}],
             "experience_required": 6,
             "qualifications": [],
             "responsibilities": [],
@@ -212,24 +216,29 @@ def test_matching_prefers_reviewed_canonical_data():
     resolved, evidence = _extract_or_load_structured_data("tender", document, [], "")
 
     assert resolved["role"] == "Senior Backend Engineer"
-    assert resolved["skills_required"] == ["Python", "FastAPI"]
+    assert [s["raw"] for s in resolved["skills_required"]] == ["Python", "FastAPI"]
     assert evidence == {}
 
 
 def test_score_candidate_rejects_bidder_tender_vs_consultant_cv_false_positive():
     tender_data = {
         "role": "Highway Construction Contractor",
+        "role_generic": "highway_construction_contractor",
         "domain": "Highway Construction",
-        "skills_required": ["Highway Construction", "Bridge Engineering"],
-        "preferred_skills": ["Construction Management"],
+        "domain_generic": "highway_construction",
+        "skills_required": [{"raw": "Highway Construction", "generic": "highway_construction"}, {"raw": "Bridge Engineering", "generic": "bridge_engineering"}],
+        "preferred_skills": [{"raw": "Construction Management", "generic": "construction_management"}],
         "experience_required": None,
     }
     resume_data = {
         "candidate_name": "Dharmireddi Sanyasi Naidu",
         "role": "Bridge Structural Engineer",
+        "role_generic": "bridge_structural_engineer",
         "domain": "Highway Construction",
-        "skills": ["Highway Construction", "Bridge Engineering"],
+        "domain_generic": "highway_construction",
+        "skills": [{"raw": "Highway Construction", "generic": "highway_construction"}, {"raw": "Bridge Engineering", "generic": "bridge_engineering"}],
         "experience": 20,
+        "total_experience_years": 20,
     }
 
     scored = _score_candidate(
@@ -257,8 +266,8 @@ def test_search_returns_results_with_review_metadata():
         "candidate_name": "Rahul Sharma",
         "role": "Senior Backend Engineer",
         "domain": "AI/ML",
-        "skills": ["Python", "FastAPI", "PostgreSQL"],
-        "experience": 6,
+        "skills": [{"raw": "Python", "generic": "python"}, {"raw": "FastAPI", "generic": "fastapi"}, {"raw": "PostgreSQL", "generic": "postgresql"}],
+        "total_experience_years": 6,
         "qualifications": [],
         "projects": [],
     }

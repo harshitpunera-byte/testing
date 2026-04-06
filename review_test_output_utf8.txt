@@ -1,0 +1,293 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.8, pytest-9.0.2, pluggy-1.6.0 -- D:\python3.10\python.exe
+cachedir: .pytest_cache
+rootdir: D:\Vocso\testing
+plugins: anyio-4.12.1, langsmith-0.3.45, typeguard-4.4.4
+collecting ... collected 6 items
+
+tests/test_review_service.py::test_document_needing_review_creates_task_and_items PASSED [ 16%]
+tests/test_review_service.py::test_approve_flow_updates_review_status FAILED [ 33%]
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit FAILED [ 50%]
+tests/test_review_service.py::test_matching_prefers_reviewed_canonical_data PASSED [ 66%]
+tests/test_review_service.py::test_score_candidate_rejects_bidder_tender_vs_consultant_cv_false_positive FAILED [ 83%]
+tests/test_review_service.py::test_search_returns_results_with_review_metadata FAILED [100%]
+
+================================== FAILURES ===================================
+___________________ test_approve_flow_updates_review_status ___________________
+
+    def test_approve_flow_updates_review_status():
+        structured_data = {
+            "candidate_name": "Rahul Sharma",
+            "role": "Python Developer",
+            "domain": "AI/ML",
+            "skills": ["Python"],
+            "experience": 2,
+            "qualifications": [],
+            "projects": [],
+        }
+        document = _make_document(
+            document_type="resume",
+            suffix="approve",
+            structured_data=structured_data,
+            evidence_map=_resume_evidence(),
+            raw_text="Rahul Sharma Python Developer with 2 years of experience in Python.",
+        )
+    
+        result = sync_document_review_state(
+            document_id=document["id"],
+            document_type="resume",
+            text=document["raw_text"],
+            structured_data=structured_data,
+            evidence_map=_resume_evidence(),
+            extraction_backend="pymupdf",
+        )
+>       approved = approve_review_task(result["review_task_id"], reviewer="qa-user", review_notes="Looks fine.")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_review_service.py:125: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+app\services\review_service.py:446: in approve_review_task
+    _refresh_resume_projection(document_id)
+app\services\review_service.py:377: in _refresh_resume_projection
+    normalization_result = normalize_resume_profile(
+app\services\profile_normalizer.py:269: in normalize_resume_profile
+    skill_rows = _skill_rows(structured_data.get("skills") or [], total_experience_months)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+skills = ['Python'], total_experience_months = None
+
+    def _skill_rows(skills: list[dict], total_experience_months: int | None) -> list[dict]:
+        rows = []
+        for index, item in enumerate(skills or []):
+>           raw = item.get("raw")
+                  ^^^^^^^^
+E           AttributeError: 'str' object has no attribute 'get'
+
+app\services\profile_normalizer.py:187: AttributeError
+____________ test_correction_flow_updates_canonical_data_and_audit ____________
+
+    def test_correction_flow_updates_canonical_data_and_audit():
+        structured_data = {
+            "candidate_name": "Rahul Sharma",
+            "role": "Python Developer",
+            "domain": "AI/ML",
+            "skills": ["Python"],
+            "experience": 2,
+            "qualifications": [],
+            "projects": [],
+        }
+        document = _make_document(
+            document_type="resume",
+            suffix="correct",
+            structured_data=structured_data,
+            evidence_map=_resume_evidence(),
+            raw_text="Rahul Sharma Python Developer with 2 years of experience in Python.",
+        )
+    
+        result = sync_document_review_state(
+            document_id=document["id"],
+            document_type="resume",
+            text=document["raw_text"],
+            structured_data=structured_data,
+            evidence_map=_resume_evidence(),
+            extraction_backend="pymupdf",
+        )
+>       corrected = correct_review_task(
+            result["review_task_id"],
+            reviewer="reviewer-a",
+            review_notes="Updated title, skills, and experience.",
+            corrections=[
+                {"field_name": "role", "corrected_value": "Senior Backend Engineer"},
+                {"field_name": "skills", "corrected_value": ["Python", "FastAPI", "PostgreSQL"]},
+                {"field_name": "experience", "corrected_value": 6},
+            ],
+        )
+
+tests\test_review_service.py:160: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+app\services\review_service.py:540: in correct_review_task
+    _refresh_resume_projection(document_id)
+app\services\review_service.py:377: in _refresh_resume_projection
+    normalization_result = normalize_resume_profile(
+app\services\profile_normalizer.py:269: in normalize_resume_profile
+    skill_rows = _skill_rows(structured_data.get("skills") or [], total_experience_months)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+skills = ['Python', 'FastAPI', 'PostgreSQL'], total_experience_months = None
+
+    def _skill_rows(skills: list[dict], total_experience_months: int | None) -> list[dict]:
+        rows = []
+        for index, item in enumerate(skills or []):
+>           raw = item.get("raw")
+                  ^^^^^^^^
+E           AttributeError: 'str' object has no attribute 'get'
+
+app\services\profile_normalizer.py:187: AttributeError
+_ test_score_candidate_rejects_bidder_tender_vs_consultant_cv_false_positive __
+
+    def test_score_candidate_rejects_bidder_tender_vs_consultant_cv_false_positive():
+        tender_data = {
+            "role": "Highway Construction Contractor",
+            "domain": "Highway Construction",
+            "skills_required": ["Highway Construction", "Bridge Engineering"],
+            "preferred_skills": ["Construction Management"],
+            "experience_required": None,
+        }
+        resume_data = {
+            "candidate_name": "Dharmireddi Sanyasi Naidu",
+            "role": "Bridge Structural Engineer",
+            "domain": "Highway Construction",
+            "skills": ["Highway Construction", "Bridge Engineering"],
+            "experience": 20,
+        }
+    
+>       scored = _score_candidate(
+            tender_data,
+            resume_data,
+            tender_text=(
+                "Request for Proposals. Selection of a private entity as the Bidder. "
+                "Technical Capacity, Financial Capacity, Bid Security, Consortium, Power of Attorney."
+            ),
+            resume_text=(
+                "Technical Proposal. Proposed Position: Bridge Structural Engineer. "
+                "Name of Firm: Rodic Consultants Pvt. Ltd. Name of Staff: Dharmireddi Sanyasi Naidu. "
+                "Independent Engineer Services."
+            ),
+        )
+
+tests\test_review_service.py:235: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tender_data = {'domain': 'Highway Construction', 'experience_required': None, 'preferred_skills': ['Construction Management'], 'role': 'Highway Construction Contractor', ...}
+resume_data = {'candidate_name': 'Dharmireddi Sanyasi Naidu', 'domain': 'Highway Construction', 'experience': 20, 'role': 'Bridge Structural Engineer', ...}
+
+    def _score_candidate(tender_data, resume_data, *, tender_text: str = "", resume_text: str = ""):
+        # 1. Prepare Tender Requirements (Generic keys)
+>       req_skills = [s.get("generic") for s in tender_data.get("skills_required", []) if s.get("generic")]
+                                                                                          ^^^^^
+E       AttributeError: 'str' object has no attribute 'get'
+
+app\services\matching_service.py:177: AttributeError
+______________ test_search_returns_results_with_review_metadata _______________
+
+    def test_search_returns_results_with_review_metadata():
+        structured_data = {
+            "candidate_name": "Rahul Sharma",
+            "role": "Senior Backend Engineer",
+            "domain": "AI/ML",
+            "skills": ["Python", "FastAPI", "PostgreSQL"],
+            "experience": 6,
+            "qualifications": [],
+            "projects": [],
+        }
+        document = _make_document(
+            document_type="resume",
+            suffix="search",
+            structured_data=structured_data,
+            evidence_map=_resume_evidence(),
+            raw_text=(
+                "Rahul Sharma Senior Backend Engineer with 6 years of experience in Python FastAPI PostgreSQL. "
+                "Built backend APIs, retrieval systems, and search services for production recruiting workflows. "
+                "Worked with PostgreSQL, vector search, and structured profile normalization across multiple resume ingestion pipelines. "
+                "Delivered candidate ranking, review tooling, and evidence-backed extraction features for enterprise hiring teams."
+            ),
+        )
+        review_state = sync_document_review_state(
+            document_id=document["id"],
+            document_type="resume",
+            text=document["raw_text"],
+            structured_data=structured_data,
+            evidence_map=_resume_evidence(),
+            extraction_backend="pymupdf",
+        )
+        if review_state.get("review_task_id"):
+>           approve_review_task(review_state["review_task_id"], reviewer="qa-user", review_notes="Approve canonical search fixture.")
+
+tests\test_review_service.py:286: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+app\services\review_service.py:446: in approve_review_task
+    _refresh_resume_projection(document_id)
+app\services\review_service.py:377: in _refresh_resume_projection
+    normalization_result = normalize_resume_profile(
+app\services\profile_normalizer.py:269: in normalize_resume_profile
+    skill_rows = _skill_rows(structured_data.get("skills") or [], total_experience_months)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+skills = ['Python', 'FastAPI', 'PostgreSQL'], total_experience_months = None
+
+    def _skill_rows(skills: list[dict], total_experience_months: int | None) -> list[dict]:
+        rows = []
+        for index, item in enumerate(skills or []):
+>           raw = item.get("raw")
+                  ^^^^^^^^
+E           AttributeError: 'str' object has no attribute 'get'
+
+app\services\profile_normalizer.py:187: AttributeError
+============================== warnings summary ===============================
+tests/test_review_service.py: 84 warnings
+  D:\python3.10\Lib\site-packages\sqlalchemy\sql\schema.py:3624: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return util.wrap_callable(lambda ctx: fn(), fn)  # type: ignore
+
+tests/test_review_service.py::test_document_needing_review_creates_task_and_items
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\review_service.py:236: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    metadata_json["review_last_evaluated_at"] = datetime.utcnow().isoformat()
+
+tests/test_review_service.py::test_document_needing_review_creates_task_and_items
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\review_service.py:183: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    task.updated_at = datetime.utcnow()
+
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\review_service.py:423: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    document.approved_at = datetime.utcnow()
+
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\review_service.py:432: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    task.updated_at = datetime.utcnow()
+
+tests/test_review_service.py::test_approve_flow_updates_review_status
+tests/test_review_service.py::test_search_returns_results_with_review_metadata
+  D:\Vocso\testing\app\services\review_service.py:437: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    review_summary["last_reviewed_at"] = datetime.utcnow().isoformat()
+
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+  D:\Vocso\testing\app\services\review_service.py:496: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    item.updated_at = datetime.utcnow()
+
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+  D:\Vocso\testing\app\services\review_service.py:507: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    changed_at=datetime.utcnow(),
+
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+  D:\Vocso\testing\app\services\review_service.py:518: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    document.approved_at = datetime.utcnow()
+
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+  D:\Vocso\testing\app\services\review_service.py:526: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    review_summary["last_reviewed_at"] = datetime.utcnow().isoformat()
+
+tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+  D:\Vocso\testing\app\services\review_service.py:533: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    task.updated_at = datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_review_service.py::test_approve_flow_updates_review_status
+FAILED tests/test_review_service.py::test_correction_flow_updates_canonical_data_and_audit
+FAILED tests/test_review_service.py::test_score_candidate_rejects_bidder_tender_vs_consultant_cv_false_positive
+FAILED tests/test_review_service.py::test_search_returns_results_with_review_metadata
+================== 4 failed, 2 passed, 107 warnings in 6.97s ==================

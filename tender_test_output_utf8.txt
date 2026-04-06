@@ -1,0 +1,69 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.8, pytest-9.0.2, pluggy-1.6.0 -- D:\python3.10\python.exe
+cachedir: .pytest_cache
+rootdir: D:\Vocso\testing
+plugins: anyio-4.12.1, langsmith-0.3.45, typeguard-4.4.4
+collecting ... collected 1 item
+
+tests/test_tender_extractor.py::test_tender_extractor_falls_back_to_llm_for_missing_preferred_skills_and_experience FAILED [100%]
+
+================================== FAILURES ===================================
+_ test_tender_extractor_falls_back_to_llm_for_missing_preferred_skills_and_experience _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001D1C01B3260>
+
+    def test_tender_extractor_falls_back_to_llm_for_missing_preferred_skills_and_experience(monkeypatch):
+        def fake_llm_extract(_text: str) -> TenderRequirements:
+            return TenderRequirements(
+                role="Data Platform Lead",
+                domain="AI/ML",
+                skills_required=["Python"],
+                preferred_skills=["Docker", "Kubernetes"],
+                experience_required=7,
+                qualifications=["B.Tech"],
+                responsibilities=["Lead delivery"],
+            )
+    
+        monkeypatch.setattr(tender_extractor, "extract_tender_requirements_llm", fake_llm_extract)
+    
+>       result = tender_extractor.extract_tender_requirements(
+            "Tender scope covers modernization of enterprise data systems."
+        )
+
+tests\test_tender_extractor.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+app\extraction\tender_extractor.py:245: in extract_tender_requirements
+    data = extract_tender_requirements_llm(text)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+_text = 'Tender scope covers modernization of enterprise data systems.'
+
+    def fake_llm_extract(_text: str) -> TenderRequirements:
+>       return TenderRequirements(
+            role="Data Platform Lead",
+            domain="AI/ML",
+            skills_required=["Python"],
+            preferred_skills=["Docker", "Kubernetes"],
+            experience_required=7,
+            qualifications=["B.Tech"],
+            responsibilities=["Lead delivery"],
+        )
+E       pydantic_core._pydantic_core.ValidationError: 4 validation errors for TenderRequirements
+E       skills_required.0
+E         Input should be a valid dictionary or instance of RawGenericItem [type=model_type, input_value='Python', input_type=str]
+E           For further information visit https://errors.pydantic.dev/2.10/v/model_type
+E       preferred_skills.0
+E         Input should be a valid dictionary or instance of RawGenericItem [type=model_type, input_value='Docker', input_type=str]
+E           For further information visit https://errors.pydantic.dev/2.10/v/model_type
+E       preferred_skills.1
+E         Input should be a valid dictionary or instance of RawGenericItem [type=model_type, input_value='Kubernetes', input_type=str]
+E           For further information visit https://errors.pydantic.dev/2.10/v/model_type
+E       qualifications.0
+E         Input should be a valid dictionary or instance of RawGenericItem [type=model_type, input_value='B.Tech', input_type=str]
+E           For further information visit https://errors.pydantic.dev/2.10/v/model_type
+
+tests\test_tender_extractor.py:7: ValidationError
+=========================== short test summary info ===========================
+FAILED tests/test_tender_extractor.py::test_tender_extractor_falls_back_to_llm_for_missing_preferred_skills_and_experience
+============================== 1 failed in 0.65s ==============================

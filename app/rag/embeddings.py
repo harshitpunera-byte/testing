@@ -1,9 +1,12 @@
 import hashlib
+import logging
 import os
 from typing import Iterable, List
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 MODEL_NAME = "BAAI/bge-small-en"
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
@@ -13,6 +16,7 @@ _model_failed = False
 
 
 def _hash_embedding(text: str) -> np.ndarray:
+    """Non-semantic fallback using SHA256 hashing to generate a stable vector."""
     vector = np.zeros(EMBEDDING_DIM, dtype="float32")
 
     for token in str(text).lower().split():
@@ -31,6 +35,12 @@ def _hash_embedding(text: str) -> np.ndarray:
 def _get_model():
     global _model, _model_failed
 
+    if os.getenv("DISABLE_LOCAL_EMBEDDINGS") == "1":
+        if not _model_failed:
+             logger.info("Local embedding model DISABLED via DISABLE_LOCAL_EMBEDDINGS flag. Using fallback hashes.")
+             _model_failed = True
+        return None
+
     if _model is not None:
         return _model
 
@@ -38,13 +48,13 @@ def _get_model():
         return None
 
     try:
+        from sentence_transformers import SentenceTransformer
+        logger.info(f"Loading embedding model: {MODEL_NAME}...")
         _model = SentenceTransformer(MODEL_NAME)
         return _model
     except Exception as exc:
         _model_failed = True
-        import logging
-        logging.getLogger(__name__).error(f"CRITICAL: Embedding model {MODEL_NAME} failed to load! Falling back to non-semantic SHA256 hashes. RAG retrieval will severely degrade. Error: {exc}")
-        print(f"CRITICAL WARNING: Embedding model {MODEL_NAME} unavailable. Generating non-semantic SHA256 hash fallback: {exc}")
+        logger.error(f"CRITICAL: Embedding model {MODEL_NAME} failed to load! Falling back to non-semantic SHA256 hashes. RAG retrieval will severely degrade. Error: {exc}")
         return None
 
 
@@ -56,6 +66,7 @@ def create_embedding(text: str) -> np.ndarray:
     vector = model.encode(text)
     vector = np.asarray(vector, dtype="float32")
     if vector.shape[0] != EMBEDDING_DIM:
+        logger.error(f"Dimension mismatch: expected {EMBEDDING_DIM}, got {vector.shape[0]}")
         raise ValueError(
             f"Embedding dimension mismatch for {MODEL_NAME}: expected {EMBEDDING_DIM}, got {vector.shape[0]}"
         )
@@ -75,8 +86,18 @@ def create_embeddings(texts: Iterable[str]) -> np.ndarray:
 
     vectors = model.encode(text_list)
     vectors = np.asarray(vectors, dtype="float32")
-    if vectors.shape[1] != EMBEDDING_DIM:
+    
+    # Check dimensions for the batch
+    if vectors.ndim == 1:
+        # Single vector result from the batch encode (should not happen for list)
+        actual_dim = vectors.shape[0]
+    else:
+        actual_dim = vectors.shape[1]
+
+    if actual_dim != EMBEDDING_DIM:
+        logger.error(f"Batch dimension mismatch: expected {EMBEDDING_DIM}, got {actual_dim}")
         raise ValueError(
-            f"Embedding dimension mismatch for {MODEL_NAME}: expected {EMBEDDING_DIM}, got {vectors.shape[1]}"
+            f"Embedding dimension mismatch for {MODEL_NAME}: expected {EMBEDDING_DIM}, got {actual_dim}"
         )
     return vectors
+

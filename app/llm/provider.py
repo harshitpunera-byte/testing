@@ -323,7 +323,12 @@ def _call_openai_text(prompt: str) -> str:
         "messages": [
             {
                 "role": "system",
-                "content": "Answer only from the provided context. If the context is insufficient, say that clearly.",
+                "content": (
+                    "You are a Recruitment and Tender Analysis Expert. "
+                    "Provide a helpful, direct, and concise answer based on the provided context. "
+                    "If a list is requested, provide it in Markdown format. "
+                    "Trust the structured analysis provided in the context."
+                )
             },
             {
                 "role": "user",
@@ -332,6 +337,7 @@ def _call_openai_text(prompt: str) -> str:
         ],
         "temperature": 0,
     }
+
 
     parsed = _openai_request(payload)
     content = parsed.get("choices", [{}])[0].get("message", {}).get("content")
@@ -349,14 +355,18 @@ def llm_json_extract(prompt: str, schema: dict, task: str = "extraction") -> str
         try:
             return _call_openai_json(prompt, schema)
         except Exception as exc:
-            print(f"OpenAI JSON extraction failed: {exc}")
+            import traceback
+            print(f"OpenAI JSON extraction failed for task '{task}': {exc}")
+            traceback.print_exc()
             return json.dumps(_fallback_from_schema(schema))
 
     # Default to Ollama
     try:
         return _call_ollama_json(prompt, schema, task=task)
     except Exception as exc:
-        print(f"Ollama unavailable, using schema fallback: {exc}")
+        import traceback
+        print(f"Ollama JSON extraction failed for task '{task}': {exc}")
+        traceback.print_exc()
         return json.dumps(_fallback_from_schema(schema))
 
 

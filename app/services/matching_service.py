@@ -127,16 +127,27 @@ def _build_resume_search_query(query, tender_data):
         parts.append(domain)
 
     if skills:
-        parts.extend(skills)
+        for s in skills:
+            if isinstance(s, dict):
+                parts.append(s.get("raw") or s.get("generic") or "")
+            else:
+                parts.append(str(s))
 
     if preferred_skills:
-        parts.extend(preferred_skills[:5])
+        for s in preferred_skills[:5]:
+            if isinstance(s, dict):
+                parts.append(s.get("raw") or s.get("generic") or "")
+            else:
+                parts.append(str(s))
 
     if experience is not None:
         parts.append(f"{experience} years experience")
 
     if not parts:
         parts.append(query)
+
+    # Clean parts: keep only non-empty strings
+    parts = [str(p) for p in parts if p]
 
     return " ".join(parts)
 
@@ -420,12 +431,32 @@ def match_resumes_with_uploaded_tender(
             "reasoning_summary": "No tender available for reasoning.",
         }
 
-    tender_document_chunks = _load_document_chunks(
+    # 1. Smarter Tender Chunk Loading: Target personnel, qualifications, and experience keywords
+    targeted_keyword_chunks = []
+    if primary_tender_document and primary_tender_document.get("id"):
+        from app.rag.tender_retriever import search_tender_vectors_hybrid
+        targets = ["personnel requirements", "minimum experience required", "qualification criteria", "staff expertise"]
+        for target in targets:
+            results = search_tender_vectors_hybrid(target, top_k=4, document_id=primary_tender_document["id"])
+            targeted_keyword_chunks.extend(results)
+
+    # Always include top chunks by order
+    ordered_chunks = _load_document_chunks(
         "tender",
         document=primary_tender_document,
         match=primary_tender_match,
-        limit=8,
+        limit=10,
     )
+    
+    # Combine and deduplicate
+    seen_chunk_ids = set()
+    tender_document_chunks = []
+    for chunk in (ordered_chunks + targeted_keyword_chunks):
+        cid = chunk.get("chunk_id")
+        if cid not in seen_chunk_ids:
+            seen_chunk_ids.add(cid)
+            tender_document_chunks.append(chunk)
+
     tender_fallback_text = "\n".join(item.get("text", "") for item in tender_matches)
     tender_data, tender_evidence_map = _extract_or_load_structured_data(
         "tender",
@@ -458,7 +489,7 @@ def match_resumes_with_uploaded_tender(
                 "document_id": item.get("document_id"),
                 "filename": None,
                 "text": item.get("summary_text", ""),
-                "score": item.get("score"),
+                "score": item.get("score") or 0.0,
             }
             for item in search_result.get("results", [])
         ]
@@ -537,6 +568,7 @@ def match_resumes_with_uploaded_tender(
                 "canonical_data_ready": (resume_document or {}).get("canonical_data_ready", False),
                 "uses_unreviewed_data": document_uses_unreviewed_data(resume_document),
                 **scored,
+                "score": scored.get("score") or 0.0,
             }
         )
         uses_unreviewed_data = uses_unreviewed_data or document_uses_unreviewed_data(resume_document)
@@ -553,9 +585,21 @@ def match_resumes_with_uploaded_tender(
 
     match_plan = get_structured_match_plan(tender_data)
 
+    # Flatten tender_requirements for UI display (prevent [object Object])
+    ui_tender_requirements = dict(tender_data)
+    for field in ["skills_required", "preferred_skills", "qualifications"]:
+        if field in ui_tender_requirements and isinstance(ui_tender_requirements[field], list):
+            flattened = []
+            for item in ui_tender_requirements[field]:
+                if isinstance(item, dict):
+                    flattened.append(item.get("raw") or item.get("generic") or "")
+                else:
+                    flattened.append(str(item))
+            ui_tender_requirements[field] = [f for f in flattened if f]
+
     return {
         "message": "Matching completed using uploaded tender.",
-        "tender_requirements": tender_data,
+        "tender_requirements": ui_tender_requirements,
         "structured_matching_plan": match_plan["structured_requirements"],
         "matching_sql_query": match_plan["sql_query"],
         "matching_explanation": match_plan["short_explanation"],
