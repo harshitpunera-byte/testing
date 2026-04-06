@@ -225,7 +225,8 @@ def _extract_responsibilities(text: str) -> List[str]:
 
 
 def _heuristic_extract_tender(text: str) -> Dict:
-    focus_text = "\n".join(text.splitlines()[:200])
+    # Expanded focus to 1000 lines to catch requirements deep in the document
+    focus_text = "\n".join(text.splitlines()[:1000])
 
     return {
         "role": _extract_role(focus_text),

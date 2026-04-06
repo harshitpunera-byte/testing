@@ -46,12 +46,19 @@ def reasoning_agent(state: Dict) -> Dict:
 
     # Generate a final overall summary
     summary_prompt = f"""
-    You are an AI Recruitment Lead. Summarize the search results for the user query: "{query}"
+    You are an AI Recruitment Lead. Review these candidates for: "{query}"
     
-    Found {len(enriched_matches)} candidates.
-    Top Candidates: {", ".join(shortlist[:3])}
+    ### CANDIDATE DATA:
+    {json.dumps([{ 'name': m.get('candidate_name','unknown'), 'phone': m.get('phone','N/A'), 'email': m.get('email', 'N/A')} for m in enriched_matches])}
     
-    Provide a professional 2-sentence overview of the pool's suitability for a client demo.
+    ### MANDATORY TASK:
+    1. If the user query implies a list, list ALL candidates in a professional Markdown Table.
+    2. COLUMNS: | Name | Phone | Email |
+    3. DATA RULE: Use the 'phone' and 'email' from the CANDIDATE DATA. 
+    4. If the phone/email is provided in the data, you MUST include it. Do NOT say N/A if data is present.
+    5. Keep it clean and professional.
+    
+    Return ONLY the final markdown text.
     """
     overall_summary = llm_text_answer(summary_prompt)
 

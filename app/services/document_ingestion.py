@@ -50,7 +50,7 @@ CHUNK_CONFIG = {
     "resume": {"chunk_size": 800, "overlap": 150},
 }
 
-INGESTION_PIPELINE_VERSION = "2026-03-26-exact-facts-v1"
+INGESTION_PIPELINE_VERSION = "2026-04-06-universal-router-v2"
 
 
 def _build_error_response(filename: str, message: str, status: str) -> dict:

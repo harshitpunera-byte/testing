@@ -25,13 +25,11 @@ function MatchCard({ item, index }) {
 
       <div className="mt-3 grid gap-2 text-xs text-slate-300 md:grid-cols-2">
         <p>Review Status: {item.review_status || "unknown"}</p>
-        <p>Canonical Data Ready: {item.canonical_data_ready ? "Yes" : "No"}</p>
         <p>Candidate Experience: {item.candidate_experience ?? "Not detected"} years</p>
-        <p>Required Experience: {item.required_experience ?? "Not detected"} years</p>
         <p>Experience Match: {item.experience_match ? "Yes" : "No"}</p>
-        <p>Role Match: {item.role_match ? "Yes" : "No"}</p>
         <p>Domain Match: {item.domain_match ? "Yes" : "No"}</p>
-        <p>Uses Unreviewed Data: {item.uses_unreviewed_data ? "Yes" : "No"}</p>
+        {item.phone && <p className="text-cyan-400 font-medium">Phone: {item.phone}</p>}
+        {item.email && <p className="text-cyan-400 font-medium truncate">Email: {item.email}</p>}
       </div>
 
       <div className="mt-3 space-y-2 text-xs text-slate-300">
@@ -50,13 +48,31 @@ function MatchCard({ item, index }) {
         <p>
           <span className="font-semibold text-slate-200">Reasoning:</span> {item.reasoning || "Not available"}
         </p>
-        {item.resume_excerpt && (
-          <p>
-            <span className="font-semibold text-slate-200">Excerpt:</span> {item.resume_excerpt}
-          </p>
-        )}
       </div>
     </div>
+  );
+}
+
+function DiagnosticTrace({ steps }) {
+  if (!Array.isArray(steps) || steps.length === 0) return null;
+
+  return (
+    <details className="group rounded-2xl border border-slate-700/50 bg-black/40 p-4 text-xs">
+      <summary className="flex cursor-pointer items-center justify-between font-semibold text-slate-400 transition hover:text-slate-300">
+        <span>⚡ Execution Trace & Decision Logic</span>
+        <span className="text-[10px] uppercase tracking-widest text-slate-500 group-open:hidden">
+          Show Steps
+        </span>
+      </summary>
+      <div className="mt-3 space-y-2 border-t border-slate-800/50 pt-3">
+        {steps.map((step, i) => (
+          <div key={i} className="flex gap-3 text-slate-400">
+            <span className="shrink-0 text-slate-600">{i + 1}.</span>
+            <span className="leading-relaxed">{step}</span>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -233,6 +249,11 @@ function AssistantAnswer({ answer, error = false, errorMessage = "" }) {
           <p className="mb-2 font-semibold text-white">Reasoning Summary</p>
           <AnswerTextBlock text={answer.reasoning_summary} />
         </div>
+      )}
+
+      {/* Execution Trace - Professional Transparency */}
+      {answer.execution_steps && (
+        <DiagnosticTrace steps={answer.execution_steps} />
       )}
       
       {/* Generated SQL Section - Always available if returned */}

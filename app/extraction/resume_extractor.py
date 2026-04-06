@@ -23,8 +23,11 @@ RESUME_SKILL_PATTERNS = [
     ("project monitoring", "Project Monitoring"),
     ("quality control", "Quality Control"),
     ("survey", "Survey"),
-    ("dpr", "Detailed Project Report"),
+    ("detailed project report", "Detailed Project Report"),
 ]
+
+PHONE_PATTERN = re.compile(r"(?:\+?\d{1,3}[\s-]?)?\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}")
+EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 
 NAME_NOISE_TOKENS = {
     "accounting",
@@ -767,6 +770,8 @@ def _heuristic_extract_resume(text: str) -> Dict:
 
     return {
         "candidate_name": _extract_candidate_name(focus_text),
+        "phone": (PHONE_PATTERN.search(focus_text) or re.search(r"", "")).group(0) if PHONE_PATTERN.search(focus_text) else None,
+        "email": (EMAIL_PATTERN.search(focus_text) or re.search(r"", "")).group(0) if EMAIL_PATTERN.search(focus_text) else None,
         "role": _extract_role(focus_text),
         "domain": _extract_domain(focus_text),
         "skills": _extract_skills(focus_text),
@@ -795,6 +800,12 @@ def extract_resume_data(text: str):
 
     if not result.get("domain") and heuristic.get("domain"):
         result["domain"] = heuristic["domain"]
+
+    if not result.get("phone") and heuristic.get("phone"):
+        result["phone"] = heuristic["phone"]
+
+    if not result.get("email") and heuristic.get("email"):
+        result["email"] = heuristic["email"]
 
     if not result.get("education") and heuristic.get("education"):
         # Convert simple strings or lists from heuristic to the expected List[str]

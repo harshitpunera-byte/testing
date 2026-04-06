@@ -355,8 +355,10 @@ def compare_tender_and_resume(
         verdict = "Not a Valid Match"
         is_valid_match = False
     elif mismatches:
-        verdict = "Partial but Misleading Match"
-        is_valid_match = False
+        # Regular mismatches (role, state, etc.) no longer invalidate the entire match.
+        # They just lower the verdict.
+        verdict = "Partial Match with Mismatches"
+        is_valid_match = True
     else:
         verdict = "Strong Match"
         is_valid_match = True

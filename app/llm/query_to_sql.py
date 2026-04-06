@@ -12,10 +12,12 @@ OBJECTIVE
 ==================================================
 Translate the user's query into a valid PostgreSQL query for filtering candidate resumes.
 
-The query MUST return EXACTLY these 3 columns in this exact order:
+The query MUST return EXACTLY these 5 columns in this exact order:
 1. resume_profiles.id
 2. resume_profiles.candidate_name
 3. documents.id AS document_id
+4. resume_profiles.phone
+5. resume_profiles.email
 
 ==================================================
 DATABASE SCHEMA
@@ -30,6 +32,8 @@ Table: resume_profiles
 - id (Integer, primary_key)
 - document_id (ForeignKey to documents.id)
 - candidate_name (String)
+- phone (String)
+- email (String)
 - normalized_title (String)
 - location_city (String)
 - total_experience_months (Integer)
@@ -59,7 +63,7 @@ MANDATORY OUTPUT SQL SHAPE
 ==================================================
 The query MUST start EXACTLY with:
 
-SELECT DISTINCT resume_profiles.id, resume_profiles.candidate_name, documents.id AS document_id
+SELECT DISTINCT resume_profiles.id, resume_profiles.candidate_name, documents.id AS document_id, resume_profiles.phone, resume_profiles.email
 FROM resume_profiles
 JOIN documents ON documents.id = resume_profiles.document_id
 
@@ -89,10 +93,11 @@ EXISTS (
 - For alternative skills ("python or java"), use OR between EXISTS blocks.
 - Prefer resume_skills over JSONB skills_normalized for exact skill filtering.
 
-92. Qualifications / Education
+2. Qualifications / Education
 If the user asks for degree/qualification filters, search across both resume_education.generic_key AND resume_education.degree.
 
 CRITICAL MAPPING (STRICT):
+- To filter by candidate name, use: resume_profiles.candidate_name ILIKE '%search_term%'
 - 'btech', 'be', 'bsc', 'bca' are BACHELORS degrees.
 - 'mtech', 'me', 'msc', 'mca', 'mba' are MASTERS degrees.
 

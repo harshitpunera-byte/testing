@@ -1,3 +1,4 @@
+import logging
 from app.extraction.resume_extractor import extract_resume_data
 from app.extraction.tender_extractor import extract_tender_requirements
 from app.graph.matching_graph import build_matching_graph
@@ -18,6 +19,7 @@ from app.services.resume_name_service import repair_resume_structured_data
 from app.services.search_service import search_resumes, get_structured_match_plan
 
 
+logger = logging.getLogger(__name__)
 matching_graph = build_matching_graph()
 
 SECTION_PRIORITIES = {
@@ -201,35 +203,58 @@ def _score_candidate(tender_data, resume_data, *, tender_text: str = "", resume_
         matched_skills = [rs for rs in raw_req if any(_phrase_match(rs, cs) for cs in raw_cand)]
         missing_skills = [rs for rs in raw_req if rs not in matched_skills]
 
-    # 4. Scoring Logic
-    skill_score = (len(matched_skills) / len(req_skills)) * 70 if req_skills else 70
-    pref_score = (len(matched_preferred) / len(pref_skills)) * 10 if pref_skills else 0
+    # 4. Production-Grade Scoring Logic (Weighted Matrix)
+    # 4a. Skills Score (50% Weight)
+    if req_skills:
+        skill_score = (len(matched_skills) / len(req_skills)) * 50
+    else:
+        # If no skills are detected in tender, assume base relevance or fallback to 50
+        skill_score = 50 if tender_text else 0
+
+    # 4b. Preferred Skills (Bonus up to 5%)
+    pref_score = (len(matched_preferred) / len(pref_skills)) * 5 if pref_skills else 0
     
+    # 4c. Role & Domain Fit (30% Weight)
     role_match = cand_role_gen == tender_role_gen if (cand_role_gen and tender_role_gen) else _text_match(tender_data.get("role"), resume_data.get("role"))
     domain_match = cand_domain_gen == tender_domain_gen if (cand_domain_gen and tender_domain_gen) else _text_match(tender_data.get("domain"), resume_data.get("domain"))
     
-    role_score = 10 if role_match else 0
-    domain_score = 10 if domain_match else 0
-
+    role_score = 15 if role_match else 0
+    domain_score = 15 if domain_match else 0
+    
+    # 4d. Experience Match (20% Weight)
     experience_match = False
     experience_score = 0
-    if req_experience is not None and cand_experience is not None:
-        experience_match = cand_experience >= req_experience
-        experience_score = 10 if experience_match else 0
+    if req_experience is not None:
+        if cand_experience is not None:
+            experience_match = cand_experience >= req_experience
+            # Ratio-based experience score (capped at 20)
+            experience_score = min(20, (cand_experience / req_experience) * 20) if experience_match else (cand_experience / req_experience) * 10
+        else:
+             experience_score = 0
+    else:
+        # If tender requirement isn't detected, we don't penalize. 
+        # We give a default passing score for experience.
+        experience_match = True 
+        experience_score = 20
 
+    # 5. Final Accumulation
     final_score = round(min(100, skill_score + pref_score + role_score + domain_score + experience_score), 2)
     
-    # Cross-document analysis fallback (Agentic check)
+    # 6. Cross-document Agentic Assessment (Penalty-based, not hard override)
     comparison_assessment = compare_tender_and_resume(
         tender_text=tender_text,
         resume_text=resume_text,
         tender_data=tender_data,
         resume_data=resume_data,
     )
-
+    
+    intent_penalty = 0.0
     if not comparison_assessment.get("is_valid_match", True):
-        final_score = 0.0
+        # We no longer set score to 0.0. We apply a severe penalty instead.
+        intent_penalty = 40.0
+        logger.warning(f"Agentic Penalty Applied: {comparison_assessment.get('verdict')}")
 
+    final_score = max(0.0, final_score - intent_penalty)
     verdict = _build_verdict(final_score, experience_match)
 
     return {

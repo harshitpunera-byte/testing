@@ -16,8 +16,10 @@ from app.services.document_repository import (
 from app.services.matching_utils import resolve_qualification_generic_key
 
 
-EMAIL_PATTERN = re.compile(r"([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})", re.IGNORECASE)
-PHONE_PATTERN = re.compile(r"(\+?\d[\d\s()-]{8,}\d)")
+# Improved Regex for Phones (International/Local with various separators)
+PHONE_PATTERN = re.compile(r"(?:(?:\+|00)\d{1,3}[-.\s]?)?\(?\d{2,5}\)?[-.\s]?\d{3,5}[-.\s]?\d{3,5}")
+# Improved Regex for Emails
+EMAIL_PATTERN = re.compile(r"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", re.IGNORECASE)
 NOTICE_PATTERN = re.compile(r"notice\s+period\s*[:\-]?\s*(\d{1,3})\s*(?:days?|day)", re.IGNORECASE)
 CTC_PATTERN = re.compile(r"(current|expected)\s+ctc\s*[:\-]?\s*([\d.]+)", re.IGNORECASE)
 LOCATION_PATTERN = re.compile(r"(?:location|address|city)\s*[:\-]?\s*([A-Za-z][A-Za-z\s,.-]{2,80})", re.IGNORECASE)
@@ -47,8 +49,18 @@ def _extract_email(text: str) -> str | None:
 
 
 def _extract_phone(text: str) -> str | None:
-    match = PHONE_PATTERN.search(text or "")
-    return _clean_text(match.group(1)) if match else None
+    if not text: return None
+    # Look for common phone patterns
+    matches = PHONE_PATTERN.findall(text)
+    if not matches:
+        return None
+    # Take the one that looks most like a phone number (longest digit string)
+    best_match = max(matches, key=lambda m: len(re.sub(r"\D", "", m)))
+    cleaned = re.sub(r"[^\d+]", "", best_match)
+    # Basic length filter (8-16 digits)
+    if 8 <= len(re.sub(r"\D", "", cleaned)) <= 16:
+        return best_match.strip()
+    return None
 
 
 def _extract_notice_period_days(text: str) -> int | None:
